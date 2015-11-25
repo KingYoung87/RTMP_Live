@@ -167,7 +167,6 @@ public:
 	afx_msg void OnBnClickedBtnDeviceAudioTest();
 	afx_msg void OnBnClickedBtnDeviceAudioTestStop();
 	afx_msg void OnBnClickedBtnDeviceVideoTestStop();
-	afx_msg void OnBnClickedBtnPushCode();
 	afx_msg void OnBnClickedChkWriteFile();
 
 	afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
@@ -204,20 +203,6 @@ private:
 	void UnInitInfo();
 
 	/**********************
-	method: 网络流采集解析
-	return: >=0:成功
-			<0:失败
-	**********************/
-	int	 UrlStreamColParse();
-
-	/**********************
-	method: 本地文件解析
-	return: >=0:成功
-			<0:失败
-	**********************/
-	int	 LocalFileParse();
-
-	/**********************
 	method: 获取连接的视频与音频设备
 	param :	_iDeviceType:设备类型
 	return: >=0:成功
@@ -238,14 +223,6 @@ private:
 	return: 
 	**********************/
 	void	 FillDisplayRect();
-
-	/**********************
-	method: 同步音频
-	param : _pstrct_streaminfo:流参数信息
-			_inb_samples:样本参数
-	return:
-	**********************/
-	int SynAudio(struct_stream_info* _pstrct_streaminfo, int _inb_samples);
 
 	/**********************
 	method: 窗体刷新

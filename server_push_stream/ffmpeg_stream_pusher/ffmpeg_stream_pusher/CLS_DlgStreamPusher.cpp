@@ -12,22 +12,12 @@
 #define new DEBUG_NEW
 #endif
 
-#define WRITE_FILE 1
-#define USE_H264	1
-#define USE_AAC	1
 #define ENCODE_FPS 30.000030
 
-FILE *pFile = NULL;
 static  Uint8  *audio_chunk;
 static  Uint32  audio_len;
 static  Uint8  *audio_pos;
-int tempsize = 4608;
-char *tempcontenx = (char*)malloc(4608);//4096~4608
-int  tempcontenxlen;
 static int64_t audio_callback_time;
-static double a = 0.8;//缩小比例
-AVStream				*pVideoStream = NULL;
-AVStream				*pAudioStream = NULL;
 
 static char *dup_wchar_to_utf8(wchar_t *w)
 {
@@ -42,35 +32,6 @@ static char *dup_wchar_to_utf8(wchar_t *w)
 static inline int compute_mod(int a, int b)
 {
 	return a < 0 ? a%b + b : a%b;
-}
-
-static int flush_encoder(AVFormatContext *fmt_ctx, unsigned int stream_index){
-	int ret;
-	int got_frame;
-	AVPacket enc_pkt;
-	if (!(fmt_ctx->streams[stream_index]->codec->codec->capabilities &
-		CODEC_CAP_DELAY))
-		return 0;
-	while (1) {
-		enc_pkt.data = NULL;
-		enc_pkt.size = 0;
-		av_init_packet(&enc_pkt);
-		ret = avcodec_encode_video2(fmt_ctx->streams[stream_index]->codec, &enc_pkt,
-			NULL, &got_frame);
-		av_frame_free(NULL);
-		if (ret < 0)
-			break;
-		if (!got_frame){
-			ret = 0;
-			break;
-		}
-		TRACE("Flush Encoder: Succeed to encode 1 frame!\tsize:%5d\n", enc_pkt.size);
-		/* mux encoded frame */
-		ret = av_write_frame(fmt_ctx, &enc_pkt);
-		if (ret < 0)
-			break;
-	}
-	return ret;
 }
 
 // CLS_DlgStreamPusher 对话框
@@ -130,7 +91,6 @@ BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_AUDIO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTestStop)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_VIDEO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop)
 	ON_BN_CLICKED(IDC_CHK_SHOW_VIDEO, &CLS_DlgStreamPusher::OnBnClickedChkShowVideo)
-	ON_BN_CLICKED(ID_BTN_PUSH_CODE, &CLS_DlgStreamPusher::OnBnClickedBtnPushCode)
 	ON_BN_CLICKED(IDC_CHK_WRITE_FILE, &CLS_DlgStreamPusher::OnBnClickedChkWriteFile)
 END_MESSAGE_MAP()
 
@@ -152,7 +112,7 @@ BOOL CLS_DlgStreamPusher::OnInitDialog()
 	//界面信息初始化
 	InitDlgItem();
 
-	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE
+	return TRUE;
 }
 
 // 如果向对话框添加最小化按钮，则需要下面的代码
@@ -212,12 +172,10 @@ void CLS_DlgStreamPusher::OnBnClickedBtnOpenLocalFile()
 	//打开本地文件
 	CString szFilter = _T("All Files (*.*)|*.*|avi Files (*.avi)|*.avi|rmvb Files (*.rmvb)|*.rmvb|3gp Files (*.3gp)|*.3gp|mp3 Files (*.mp3)|*.mp3|mp4 Files (*.mp4)|*.mp4|mpeg Files (*.ts)|*.ts|flv Files (*.flv)|*.flv|mov Files (*.mov)|*.mov||");
 	CFileDialog dlg(TRUE, NULL, NULL, OFN_PATHMUSTEXIST | OFN_HIDEREADONLY, szFilter, NULL);
-	if (IDOK == dlg.DoModal())
-	{
+	if (IDOK == dlg.DoModal()){
 		m_cstrFilePath = dlg.GetPathName();
 	}
-	else
-	{
+	else{
 		MessageBox(_T("获取文件名称失败 请重新加载"), NULL, MB_OK);
 		m_cstrFilePath = "";
 		return;
@@ -231,18 +189,6 @@ void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 	if (m_cstrFilePath == ""){
 		MessageBox("请选择进行推送的文件!");
 		return;
-	}
-
-	//进行文件解析进行显示
-	if (m_blUrl){
-		if (UrlStreamColParse() < 0){
-			goto END;
-		}
-	}
-	else{
-		if (LocalFileParse() < 0){
-			goto END;
-		}
 	}
 
 END:
@@ -382,8 +328,8 @@ void CLS_DlgStreamPusher::InitDlgItem()
 	if (sdlinit)
 	{
 		char * sss = (char*)SDL_GetError();
-		fprintf(stderr, "Could not initialize SDL - %s\n", SDL_GetError());
-		fprintf(stderr, "(Did you set the DISPLAY variable?)\n");
+		TRACE("Could not initialize SDL - %s\n", SDL_GetError());
+		TRACE("(Did you set the DISPLAY variable?)\n");
 		return;
 	}
 
@@ -425,7 +371,7 @@ void CLS_DlgStreamPusher::InitDlgItem()
 		m_pThreadEvent = AfxBeginThread(Thread_Event, this);//开启线程
 	}
 
-	m_edtPusherAddr.SetWindowText("rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512");// ("rtmp://dlpub.live.hupucdn.com/prod/ca093f98f0696a56fc2d42bfd309b903");// ("rtmp://123.59.87.24:1935/hls/live_stream");("rtmp://xxg2c3.publish.z1.pili.qiniup.com/dongqiudi/live3?key=bc21bda2fe27c512");// 
+	m_edtPusherAddr.SetWindowText("rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512");// ("rtmp://dlpub.live.hupucdn.com/prod/ca093f98f0696a56fc2d42bfd309b903");
 
 	return;
 }
@@ -516,20 +462,6 @@ HBRUSH CLS_DlgStreamPusher::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 	return   hbr;
 }
 
-int CLS_DlgStreamPusher::UrlStreamColParse()
-{
-	int iRet = -1;
-
-	return iRet;
-}
-
-int CLS_DlgStreamPusher::LocalFileParse()
-{
-	int iRet = -1;
-
-	return iRet;
-}
-
 int CLS_DlgStreamPusher::GetDeviceInfo(int _iDeviceType)
 {
 	int iRet = -1;
@@ -618,10 +550,6 @@ int video_thr(LPVOID lpParam)
 		return iRet;
 	}
 
-#if WRITE_FILE
-	//FILE *fp_yuv = fopen("output.yuv", "wb+");
-#endif
-
 	start_time = av_gettime();
 
 	AVFrame	* pFrame;
@@ -671,7 +599,6 @@ int video_thr(LPVOID lpParam)
 			}
 
 			int iVideoFifoSize = av_fifo_space(strct_streaminfo->m_pVideoFifo);
-			//TRACE("----video_thr----iVideoFifoSize is[%ld] and size is[%d]----\n", iVideoFifoSize, size);
 			if (iVideoFifoSize >= size){
 				SDL_mutexP(strct_streaminfo->m_pVideoMutex);
 				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[0], y_size, NULL);
@@ -684,9 +611,6 @@ int video_thr(LPVOID lpParam)
 
 	iRet = 1;
 END:
-#if WRITE_FILE
-	//fclose(fp_yuv);
-#endif
 	av_frame_free(&picture);
 	av_frame_free(&pFrame);
 
@@ -834,8 +758,7 @@ int audio_thr(LPVOID lpParam)
 		}
 
 		int buf_space = av_audio_fifo_space(pStrctStreamInfo->m_pAudioFifo);
-		//TRACE("~~~audio_thr~~~buf_space is [%d] and pFrame->nb_samples is [%d]\n", buf_space, pFrame->nb_samples);
-		if (av_audio_fifo_space(pStrctStreamInfo->m_pAudioFifo) >= pFrame->nb_samples){
+		if (buf_space >= pFrame->nb_samples){
 			av_audio_fifo_write(pStrctStreamInfo->m_pAudioFifo, (void **)pFrame->data, pFrame->nb_samples);
 		}
 		else if (buf_space > 0){
@@ -961,54 +884,6 @@ void CLS_DlgStreamPusher::FillDisplayRect()
 	if (SDL_UpdateWindowSurface(streamInfo->m_show_screen) != 0){
 		TRACE("SDL_UpdateWindowSurface ERR");
 	}
-}
-
-int CLS_DlgStreamPusher::SynAudio(struct_stream_info* _pstrct_streaminfo, int _inb_samples)
-{
-	int iRet = -1;
-	if (NULL == _pstrct_streaminfo){
-		TRACE("NULL == _pstrct_streaminfo\n");
-		return iRet;
-	}
-	int wanted_nb_samples = _inb_samples;
-
-	//if (((_pstrct_streaminfo->av_sync_type == AV_SYNC_VIDEO_MASTER && _pstrct_streaminfo->video_st) ||
-	//	_pstrct_streaminfo->av_sync_type == AV_SYNC_EXTERNAL_CLOCK)) {
-	//	double diff, avg_diff;
-	//	int min_nb_samples, max_nb_samples;
-
-	//	diff = get_audio_clock(is) - get_master_clock(is);
-
-	//	if (diff < AV_NOSYNC_THRESHOLD) {
-	//		is->audio_diff_cum = diff + is->audio_diff_avg_coef * is->audio_diff_cum;
-	//		if (is->audio_diff_avg_count < AUDIO_DIFF_AVG_NB) {
-	//			/* not enough measures to have a correct estimate */
-	//			is->audio_diff_avg_count++;
-	//		}
-	//		else {
-	//			/* estimate the A-V difference */
-	//			avg_diff = is->audio_diff_cum * (1.0 - is->audio_diff_avg_coef);
-
-	//			if (fabs(avg_diff) >= is->audio_diff_threshold) {
-	//				wanted_nb_samples = nb_samples + (int)(diff * is->audio_src.freq);
-	//				min_nb_samples = ((nb_samples * (100 - SAMPLE_CORRECTION_PERCENT_MAX) / 100));
-	//				max_nb_samples = ((nb_samples * (100 + SAMPLE_CORRECTION_PERCENT_MAX) / 100));
-	//				wanted_nb_samples = FFMIN(FFMAX(wanted_nb_samples, min_nb_samples), max_nb_samples);
-	//			}
-	//			av_dlog(NULL, "diff=%f adiff=%f sample_diff=%d apts=%0.3f vpts=%0.3f %f\n",
-	//				diff, avg_diff, wanted_nb_samples - nb_samples,
-	//				is->audio_clock, is->video_clock, is->audio_diff_threshold);
-	//		}
-	//	}
-	//	else {
-	//		/* too big difference : may be initial PTS errors, so
-	//		reset A-V filter */
-	//		is->audio_diff_avg_count = 0;
-	//		is->audio_diff_cum = 0;
-	//	}
-	//}
-
-	return wanted_nb_samples;
 }
 
 void CLS_DlgStreamPusher::event_loop(struct_stream_info *_pstrct_streaminfo)
@@ -1277,48 +1152,6 @@ void CLS_DlgStreamPusher::OnBnClickedChkShowVideo()
 	else{
 		m_blVideoShow = FALSE;
 	}
-}
-
-void CLS_DlgStreamPusher::OnBnClickedBtnPushCode()
-{
-	//通过命令行的方式进行推送
-	//ffmpeg -f dshow -s 320x240 -r 30 -i video="FaceTime HD Camera" -vcodec libx264 -preset:v ultrafast -tune:v zerolatency -f flv "rtmp://5380.lsspublish.aodianyun.com/Young/stream"
-	CString cstrRtmpAddr = "";
-	m_edtPusherAddr.GetWindowText(cstrRtmpAddr);
-	if (cstrRtmpAddr == ""){
-		MessageBox(_T("请输入合法的推流地址！/n"));
-		return;
-	}
-
-	CString cstrVideoDev = "";
-	m_cboDeviceVideo.GetWindowText(cstrVideoDev);
-	if (cstrVideoDev == ""){
-		MessageBox(_T("请选择合适的视频输入设备！/n"));
-		return;
-	}
-
-	CString cstrAudioDev = "";
-	m_cboDeviceAudio.GetWindowText(cstrAudioDev);
-	if (cstrAudioDev == ""){
-		MessageBox(_T("请选择合适的音频输入设备！/n"));
-		return;
-	}
-
-	string strResolution = get_resolution();
-	if (strResolution == ""){
-		MessageBox("请选择合适的分辨率进行操作！/n");
-		return;
-	}
-
-	//获取程序运行路径
-	char exeFullPath[MAX_PATH]; // Full path
-	string strPath = "";
-	GetModuleFileName(NULL, exeFullPath, MAX_PATH);
-	strPath = (string)exeFullPath;    // Get full path of the file
-	int pos = strPath.find_last_of('\\', strPath.length());
-	strPath.substr(0, pos);
-
-	//组合执行命令
 }
 
 string CLS_DlgStreamPusher::get_resolution()
@@ -1683,7 +1516,6 @@ int CLS_DlgStreamPusher::OpenCamera()
 	m_pStreamInfo->m_video_refresh_tid = SDL_CreateThread(video_refresh_thread, NULL, m_pStreamInfo);
 
 	//需要将采集信息写文件，打开解码器
-#if WRITE_FILE
 	pCodec = avcodec_find_decoder(m_pCodecVideoCtx->codec_id);
 	if (pCodec == NULL){
 		TRACE("avcodec_find_decoder<0");
@@ -1693,7 +1525,6 @@ int CLS_DlgStreamPusher::OpenCamera()
 		TRACE("avcodec_open2<0");
 		return iRet;
 	}
-#endif
 
 	iRet = 0;
 	return iRet;
@@ -1765,6 +1596,8 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 {
 	int iRet = -1;
 	AVOutputFormat		*pStreamOutfmt = NULL;
+	AVStream				*pVideoStream = NULL;
+	AVStream				*pAudioStream = NULL;
 	if (NULL == m_pStreamInfo || NULL == m_pCodecVideoCtx){
 		TRACE("NULL == m_pStreamInfo || NULL == m_pCodecVideoCtx");
 		return iRet;
