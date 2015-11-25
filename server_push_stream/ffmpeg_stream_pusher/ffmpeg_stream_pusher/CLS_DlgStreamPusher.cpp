@@ -1425,10 +1425,11 @@ int push_thr(LPVOID lpParam)
 						pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base);
 					pkt.dts = av_rescale_q(pkt.dts, pThis->m_pFmtVideoCtx->streams[0]->time_base,
 						pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base);
+					if (pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->coded_frame->key_frame){
+						pkt.flags |= AV_PKT_FLAG_KEY;
+					}
 
-					//pkt.pos = -1;
 					TRACE("------video pts-------is [%d]\n", pkt.pts);
-					//TRACE("~~~~~~video dts~~~~~~~is [%d]\n", pkt.dts);
 					cur_pts_v = pkt.pts;
 
 					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt) < 0 ){
@@ -1484,12 +1485,7 @@ int push_thr(LPVOID lpParam)
 					pkt_out.dts = av_rescale_q(pkt_out.dts, pThis->m_pFmtAudioCtx->streams[0]->time_base,
 						pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base);
 
-					/*pkt_out.pts = av_rescale_q_rnd(pkt_out.pts, pThis->m_pFmtAudioCtx->streams[0]->time_base,
-						pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-					pkt_out.dts = av_rescale_q_rnd(pkt_out.dts, pThis->m_pFmtAudioCtx->streams[0]->time_base,
-						pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));*/
 					TRACE("~~~~audio pts~~~~~is [%d]\n", pkt_out.pts);
-					//TRACE("~~~~audio dts~~~~~is [%d]\n", pkt_out.pts);
 
 					cur_pts_a = pkt_out.pts;
 					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt_out) < 0){
