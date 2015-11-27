@@ -57,6 +57,7 @@
       <SDLCheck>false</SDLCheck>
       <AdditionalIncludeDirectories>.\ffmepg_sdk\include;.\sdl_sdk\include;.\gl_sdk\include;$(ProjectDir)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

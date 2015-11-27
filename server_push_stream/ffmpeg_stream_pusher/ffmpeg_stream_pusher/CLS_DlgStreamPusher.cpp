@@ -1,5 +1,5 @@
 
-// ffmpeg_stream_pusherDlg.cpp : 实现文件
+// CLS_DlgStreamPusher.cpp : 实现文件
 //
 
 #include "stdafx.h"
@@ -18,6 +18,8 @@ static  Uint8  *audio_chunk;
 static  Uint32  audio_len;
 static  Uint8  *audio_pos;
 static int64_t audio_callback_time;
+
+string strResolution[5] = {"1920*1080", "1280*720", "720*576", "320*240"};
 
 static char *dup_wchar_to_utf8(wchar_t *w)
 {
@@ -92,6 +94,8 @@ BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_VIDEO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop)
 	ON_BN_CLICKED(IDC_CHK_SHOW_VIDEO, &CLS_DlgStreamPusher::OnBnClickedChkShowVideo)
 	ON_BN_CLICKED(IDC_CHK_WRITE_FILE, &CLS_DlgStreamPusher::OnBnClickedChkWriteFile)
+	ON_CBN_SELCHANGE(IDC_COB_DEVICE_VIDEO, &CLS_DlgStreamPusher::OnCbnSelchangeCobDeviceVideo)
+	ON_CBN_SELCHANGE(IDC_COB_RESOLUTION, &CLS_DlgStreamPusher::OnCbnSelchangeCobResolution)
 END_MESSAGE_MAP()
 
 
@@ -320,7 +324,8 @@ void CLS_DlgStreamPusher::InitDlgItem()
 		}
 	}
 
-	m_cboResolution.SetCurSel(0);
+	//分辨率初始化
+	OnCbnSelchangeCobDeviceVideo();
 
 	//SDL初始化
 	int flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
@@ -1154,35 +1159,125 @@ void CLS_DlgStreamPusher::OnBnClickedChkShowVideo()
 	}
 }
 
-string CLS_DlgStreamPusher::get_resolution()
+void CLS_DlgStreamPusher::GetResolution(int _iVideoIndex)
 {
 	string strResolution = "";
-	int iIndex = m_cboResolution.GetCurSel();
-	if (iIndex < 0){
-		TRACE("iIndex < 0");
-		return strResolution;
+	IBaseFilter *pVideoCapFilter;       // 视频捕获滤波器
+	IGraphBuilder *pGraph;
+	ICaptureGraphBuilder2 *pDevGraphBuilder;
+	HRESULT hr = NULL;
+	int iSize = 0;
+	int iCount = 0;
+
+	hr = CoCreateInstance(CLSID_CaptureGraphBuilder2, NULL,
+		CLSCTX_INPROC, IID_ICaptureGraphBuilder2, (void **)&pDevGraphBuilder);
+	if (S_OK != hr){
+		TRACE("S_OK != hr\n");
+		return;
 	}
 
-	switch (iIndex)
+	hr = CoCreateInstance(CLSID_FilterGraph, NULL, CLSCTX_INPROC, IID_IGraphBuilder, (void **)&pGraph);
+	if (S_OK != hr){
+		TRACE("S_OK != hr\n");
+		return;
+	}
+
+	pDevGraphBuilder->SetFiltergraph(pGraph);
+
+	if (!BindFilter(_iVideoIndex, &pVideoCapFilter, n_Video)){
+		TRACE("!BindFilter(0, &pVideoCapFilter, n_Video)\n");
+		return;
+	}
+
+	CComPtr<IAMStreamConfig> pCfg = 0;
+	hr = pDevGraphBuilder->FindInterface(&PIN_CATEGORY_CAPTURE, &MEDIATYPE_Video, pVideoCapFilter, IID_IAMStreamConfig, (void**)&pCfg);
+	if (S_OK != hr){
+		TRACE("S_OK != hr\n");
+		return;
+	}
+
+	hr = pCfg->GetNumberOfCapabilities(&iCount, &iSize);
+	if (S_OK != hr){
+		TRACE("S_OK != hr\n");
+		return;
+	}
+
+	if (iSize == sizeof(VIDEO_STREAM_CONFIG_CAPS)){
+		for (int iFormat = 0; iFormat < iCount; iFormat++){
+			VIDEO_STREAM_CONFIG_CAPS pVideoStreamConfig;
+			VIDEOINFOHEADER*	pVideoHeadInfo = NULL;
+			BITMAPINFOHEADER* pBitMapHeadInfo = NULL;
+			AM_MEDIA_TYPE   *pMediaConfig = NULL;
+			hr = pCfg->GetStreamCaps(iFormat, &pMediaConfig, (BYTE*)&pVideoHeadInfo);
+			if (S_OK != hr){
+				TRACE("S_OK != hr\n");
+				return;
+			}
+			pVideoHeadInfo = (VIDEOINFOHEADER*)pMediaConfig->pbFormat;
+			pBitMapHeadInfo = &pVideoHeadInfo->bmiHeader;
+			int iWidth = pBitMapHeadInfo->biWidth;
+			int iHeight = pBitMapHeadInfo->biHeight;
+			if (iWidth == 0 || iHeight == 0){
+				continue;
+			}
+
+			//组成字符串添加到下拉框中
+			strResolution = IntToStr(iWidth);
+			strResolution += " * ";
+			strResolution += IntToStr(iHeight);
+			m_cboResolution.AddString(strResolution.c_str());
+
+			map<int, int> mapResolution;
+			mapResolution.insert(map<int, int>::value_type(iWidth, iHeight));
+			m_mapResolution[m_mapResolution.size()] = mapResolution;
+		}
+	}
+}
+
+bool CLS_DlgStreamPusher::BindFilter(int iDeviceID, IBaseFilter **pOutFilter, DeviceType deviceType)
+{
+	if (iDeviceID < 0) return false;
+	// 枚举所有的视频设备  
+	ICreateDevEnum *pCreateDevEnum;
+	//生成设备枚举器pCreateDevEnum  
+	HRESULT hr = CoCreateInstance(CLSID_SystemDeviceEnum,
+		NULL, CLSCTX_INPROC_SERVER, IID_ICreateDevEnum, (void **)&pCreateDevEnum);
+	if (hr != NOERROR) return false;
+	IEnumMoniker *pEM;
+	// 创建视频输入设备类枚举器  
+	if (deviceType == n_Video)
+		hr = pCreateDevEnum->CreateClassEnumerator(CLSID_VideoInputDeviceCategory, &pEM, 0);
+	// 音频设备枚举器  
+	else
+		hr = pCreateDevEnum->CreateClassEnumerator(CLSID_AudioInputDeviceCategory, &pEM, 0);
+	if (hr != NOERROR) return false;
+	pEM->Reset();  // 复位该设备  
+	ULONG cFetched;
+	IMoniker *pM;
+	int indexDev = 0;
+	// 获取设备  
+	while (hr = pEM->Next(1, &pM, &cFetched), hr == S_OK, indexDev <= iDeviceID)
 	{
-	case 0:
-		strResolution = "1920x1080";
-		break;
-	case 1:
-		strResolution = "1280x720";
-		break;
-	case 2:
-		strResolution = "720x576";
-		break;
-	case 3:
-		strResolution = "320x240";
-		break;
-	default:
-		strResolution = "1280x720";
-		break;
+		IPropertyBag *pBag;
+		// 获取该设备属性集  
+		hr = pM->BindToStorage(0, 0, IID_IPropertyBag, (void **)&pBag);
+		if (SUCCEEDED(hr))
+		{
+			VARIANT var;
+			var.vt = VT_BSTR;
+			hr = pBag->Read(L"FriendlyName", &var, NULL);
+			if (hr == NOERROR)
+			{
+				// 采集设备与捕获滤波器捆绑  
+				if (indexDev == iDeviceID) pM->BindToObject(0, 0, IID_IBaseFilter, (void **)pOutFilter);
+				SysFreeString(var.bstrVal);
+			}
+			pBag->Release();
+		}
+		pM->Release();
+		indexDev++;
 	}
-
-	return strResolution;
+	return true;
 }
 
 void CLS_DlgStreamPusher::OnBnClickedChkWriteFile()
@@ -1717,4 +1812,35 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 	}
 
 	return iRet;
+}
+
+void CLS_DlgStreamPusher::OnCbnSelchangeCobDeviceVideo()
+{
+	m_mapResolution.clear();
+	m_cboResolution.ResetContent();
+	int iCurSelIndex = m_cboDeviceVideo.GetCurSel();
+	if (iCurSelIndex < 0){
+		TRACE("iCurSelIndex < 0\n");
+		return;
+	}
+	GetResolution(iCurSelIndex);
+	m_cboResolution.SetCurSel(0);
+}
+
+
+void CLS_DlgStreamPusher::OnCbnSelchangeCobResolution()
+{
+	int iSelResIndex = m_cboResolution.GetCurSel();
+	if (iSelResIndex < 0){
+		TRACE("iSelResIndex < 0\n");
+		return;
+	}
+
+	map<int, int> mapResolution;
+	mapResolution = m_mapResolution[iSelResIndex];
+	map<int, int>::iterator iter = mapResolution.begin();
+	for (; iter != mapResolution.end(); iter++){
+		m_iVideoWidth = iter->first;
+		m_iVideoHeight = iter->second;
+	}
 }

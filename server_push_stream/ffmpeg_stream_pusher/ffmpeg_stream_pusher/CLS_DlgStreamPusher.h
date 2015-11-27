@@ -168,6 +168,8 @@ public:
 	afx_msg void OnBnClickedBtnDeviceAudioTestStop();
 	afx_msg void OnBnClickedBtnDeviceVideoTestStop();
 	afx_msg void OnBnClickedChkWriteFile();
+	afx_msg void OnCbnSelchangeCobDeviceVideo();
+	afx_msg void OnCbnSelchangeCobResolution();
 
 	afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
 
@@ -209,6 +211,20 @@ private:
 			<0:失败
 	**********************/
 	int  GetDeviceInfo(int _iDeviceType);
+
+	/**********************
+	method: 获取分辨率
+	param
+	return: 分辨率信息
+	**********************/
+	void GetResolution(int _iVideoIndex);
+
+	/**********************
+	method: 绑定滤波器
+	param
+	return: true:成功 false:失败
+	**********************/
+	bool BindFilter(int iDeviceID, IBaseFilter **pOutFilter, DeviceType deviceType);
 
 	/**********************
 	method: 获取音视频信息结构体
@@ -279,13 +295,6 @@ private:
 	void stream_stop(void *opaque);
 
 	/**********************
-	method: 获取分辨率
-	param:	
-	return: 分辨率信息
-	**********************/
-	string get_resolution();
-
-	/**********************
 	method: 打开摄像头
 	param:
 	return: <0：打开失败
@@ -350,4 +359,5 @@ public:
 	int										m_iPictureSize;	//一帧大小
 	uint8_t								   *m_pPictureBuf;	//数据内容
 	SDL_Thread							   *m_pPushThrid;	//推流线程
+	map<int, map<int, int>>					m_mapResolution;	//分辨率容器
 };
