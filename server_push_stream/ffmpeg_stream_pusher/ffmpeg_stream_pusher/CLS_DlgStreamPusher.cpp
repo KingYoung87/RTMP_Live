@@ -12,7 +12,7 @@
 #define new DEBUG_NEW
 #endif
 
-#define ENCODE_FPS 30.000030
+#define ENCODE_FPS 25//30.000030
 
 static  Uint8  *audio_chunk;
 static  Uint32  audio_len;
@@ -759,7 +759,7 @@ int audio_thr(LPVOID lpParam)
 		SDL_mutexP(pStrctStreamInfo->m_pAudioMutex);
 		if (NULL == pStrctStreamInfo->m_pAudioFifo){
 			pStrctStreamInfo->m_pAudioFifo = av_audio_fifo_alloc(pThis->m_pFmtAudioCtx->streams[0]->codec->sample_fmt,
-				pThis->m_pFmtAudioCtx->streams[0]->codec->channels, 3 * pFrame->nb_samples);
+				pThis->m_pFmtAudioCtx->streams[0]->codec->channels, 30 * pFrame->nb_samples);
 		}
 
 		int buf_space = av_audio_fifo_space(pStrctStreamInfo->m_pAudioFifo);
@@ -1225,7 +1225,7 @@ void CLS_DlgStreamPusher::GetResolution(int _iVideoIndex)
 			strResolution = IntToStr(iWidth);
 			strResolution += " * ";
 			strResolution += IntToStr(iHeight);
-			m_cboResolution.AddString(strResolution.c_str());
+			m_cboResolution.InsertString(m_cboResolution.GetCount(), strResolution.c_str());
 
 			map<int, int> mapResolution;
 			mapResolution.insert(map<int, int>::value_type(iWidth, iHeight));
@@ -1591,10 +1591,12 @@ int CLS_DlgStreamPusher::OpenCamera()
 		TRACE("NULL == m_pCodecVideoCtx");
 		return iRet;
 	}
+	m_pCodecVideoCtx->height = m_iVideoHeight;
+	m_pCodecVideoCtx->width = m_iVideoWidth;
 
 	//获取视频的宽与高
-	m_iVideoHeight = m_pCodecVideoCtx->height;
-	m_iVideoWidth = m_pCodecVideoCtx->width;
+	//m_iVideoHeight = m_pCodecVideoCtx->height;
+	//m_iVideoWidth = m_pCodecVideoCtx->width;
 	TRACE("video_thr--video_height[%d],video_width[%d]", m_iVideoHeight
 		, m_iVideoWidth);
 
@@ -1720,16 +1722,16 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 		}
 		pVideoStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_H264);
 		pVideoStream->codec->codec_tag = 0;
-		pVideoStream->codec->height = m_pCodecVideoCtx->height;
-		pVideoStream->codec->width = m_pCodecVideoCtx->width;
+		pVideoStream->codec->height = m_iVideoHeight;// m_pCodecVideoCtx->height;//
+		pVideoStream->codec->width = m_iVideoWidth;// m_pCodecVideoCtx->width;//
 		pVideoStream->codec->time_base.den = ENCODE_FPS;
 		pVideoStream->codec->time_base.num = 1;
 		pVideoStream->codec->sample_aspect_ratio = m_pCodecVideoCtx->sample_aspect_ratio;
 		pVideoStream->codec->pix_fmt = AV_PIX_FMT_YUV420P;
 		// take first format from list of supported formats
-		pVideoStream->codec->bit_rate = 500000;
-		pVideoStream->codec->rc_max_rate = 500000;
-		pVideoStream->codec->rc_min_rate = 500000;
+		pVideoStream->codec->bit_rate = 900000;
+		pVideoStream->codec->rc_max_rate = 900000;
+		pVideoStream->codec->rc_min_rate = 900000;
 		pVideoStream->codec->gop_size = m_pCodecVideoCtx->gop_size;
 		pVideoStream->codec->qmin = 5;
 		pVideoStream->codec->qmax = 51;
@@ -1825,6 +1827,9 @@ void CLS_DlgStreamPusher::OnCbnSelchangeCobDeviceVideo()
 	}
 	GetResolution(iCurSelIndex);
 	m_cboResolution.SetCurSel(0);
+
+	//获取当前分辨率
+	OnCbnSelchangeCobResolution();
 }
 
 
