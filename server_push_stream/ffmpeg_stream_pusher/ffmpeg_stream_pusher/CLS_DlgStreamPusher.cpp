@@ -50,7 +50,6 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_blVideoShow = FALSE;
 	m_blAudioShow = FALSE;
 	m_blPushStream = FALSE;
-	m_blOut = FALSE;
 	m_cstrPushAddr = "";
 	m_pFmtVideoCtx = NULL;
 	m_pFmtAudioCtx = NULL;
@@ -193,9 +192,6 @@ void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 		MessageBox("请选择进行推送的文件!");
 		return;
 	}
-
-END:
-	MessageBox("解析失败，请确认网络连接无误!");
 	return;
 }
 
@@ -206,9 +202,6 @@ void CLS_DlgStreamPusher::OnBnClickedCancel()
 	UnInitInfo();
 
 	CoUninitialize();
-
-	//退出程序
-	CDialog::OnCancel();
 }
 static int audio_refresh_thread(void *opaque)
 {
@@ -244,7 +237,6 @@ static int video_refresh_thread(void *opaque)
 		SDL_PushEvent(&event);
 	}
 	SDL_Delay(40);
-	pstrct_streaminfo->m_iAbortRequest = 0;
 	SDL_Event event;
 	event.type = FF_BREAK_EVENT;
 	SDL_PushEvent(&event);
@@ -382,7 +374,6 @@ void CLS_DlgStreamPusher::InitDlgItem()
 
 void CLS_DlgStreamPusher::UnInitInfo()
 {
-	m_blOut = TRUE;
 	//释放相关资源
 	if (m_cstrFilePath != ""){
 		m_cstrFilePath.ReleaseBuffer();
@@ -396,11 +387,14 @@ void CLS_DlgStreamPusher::UnInitInfo()
 
 	m_mapDeviceInfo.clear();
 
-	if (NULL != m_pPushThrid){
-		SDL_WaitThread(m_pPushThrid, NULL);
-		m_pPushThrid = NULL;
-	}
 	if (NULL != m_pStreamInfo){
+		m_pStreamInfo->m_iAbortRequest = 1;
+
+		if (NULL != m_pPushThrid){
+			SDL_WaitThread(m_pPushThrid, NULL);
+			m_pPushThrid = NULL;
+		}
+
 		if (m_pStreamInfo->m_pVideoThr){
 			SDL_WaitThread(m_pStreamInfo->m_pVideoThr, NULL);
 			m_pStreamInfo->m_pVideoThr = NULL;
@@ -409,33 +403,51 @@ void CLS_DlgStreamPusher::UnInitInfo()
 			SDL_WaitThread(m_pStreamInfo->m_pAudioThr, NULL);
 			m_pStreamInfo->m_pAudioThr = NULL;
 		}
+		if (m_pStreamInfo->m_pVideoRefreshThr){
+			SDL_WaitThread(m_pStreamInfo->m_pVideoRefreshThr, NULL);
+			m_pStreamInfo->m_pVideoRefreshThr = NULL;
+		}
+		if (m_pStreamInfo->m_pAudioRefreshThr){
+			SDL_WaitThread(m_pStreamInfo->m_pAudioRefreshThr, NULL);
+			m_pStreamInfo->m_pAudioRefreshThr = NULL;
+		}
+
 		if (m_pStreamInfo->m_pVideoSwsCtx){
 			sws_freeContext(m_pStreamInfo->m_pVideoSwsCtx);
+			m_pStreamInfo->m_pVideoSwsCtx = NULL;
 		}
 		if (m_pStreamInfo->m_pVideoFrameShowYUV){
 			av_frame_free(&m_pStreamInfo->m_pVideoFrameShowYUV);
+			m_pStreamInfo->m_pVideoFrameShowYUV = NULL;
 		}
 		if (m_pStreamInfo->m_pVideoFramePushYUV){
 			av_frame_free(&m_pStreamInfo->m_pVideoFramePushYUV);
+			m_pStreamInfo->m_pVideoFramePushYUV = NULL;
 		}
 		if (m_pStreamInfo->m_pVideoFrame){
 			av_frame_free(&m_pStreamInfo->m_pVideoFrame);
+			m_pStreamInfo->m_pVideoFrame = NULL;
 		}
 		if (m_pStreamInfo->m_pAudioMutex){
 			SDL_DestroyMutex(m_pStreamInfo->m_pAudioMutex);
+			m_pStreamInfo->m_pAudioMutex = NULL;
 		}
 		if (m_pStreamInfo->m_pVideoMutex){
 			SDL_DestroyMutex(m_pStreamInfo->m_pVideoMutex);
+			m_pStreamInfo->m_pVideoMutex = NULL;
 		}
 
+		m_pStreamInfo->m_iAbortRequest = 0;
 	}
 
 	if (NULL != m_pFmtVideoCtx){
 		avformat_close_input(&m_pFmtVideoCtx);
+		m_pFmtVideoCtx = NULL;
 	}
 
 	if (NULL != m_pFmtAudioCtx){
 		avformat_close_input(&m_pFmtAudioCtx);
+		m_pFmtAudioCtx = NULL;
 	}
 
 	if (NULL != m_pFmtRtmpCtx){
@@ -443,11 +455,14 @@ void CLS_DlgStreamPusher::UnInitInfo()
 			avio_close(m_pFmtRtmpCtx->pb);
 		}
 		avformat_free_context(m_pFmtRtmpCtx);
+		m_pFmtRtmpCtx = NULL;
 	}
 
 	if (NULL != m_pPictureBuf){
 		av_free(m_pPictureBuf);
+		m_pPictureBuf = NULL;
 	}
+
 	return;
 }
 
@@ -574,7 +589,7 @@ int video_thr(LPVOID lpParam)
 
 	//从摄像头获取数据
 	while(1){
-		if (pThis->m_blOut){
+		if (strct_streaminfo->m_iAbortRequest){
 			break;
 		}
 		pkt.data = NULL;
@@ -717,7 +732,7 @@ int audio_thr(LPVOID lpParam)
 	}
 
 	while (1){
-		if (pThis->m_blOut){
+		if (pStrctStreamInfo->m_iAbortRequest){
 			break;
 		}
 		pkt.data = NULL;
@@ -1127,7 +1142,6 @@ void CLS_DlgStreamPusher::StopStream(void *opaque)
 	}
 
 	//做停止流推送的操作
-	pstrct_streaminfo->m_iAbortRequest = 1;
 	SDL_WaitThread(pstrct_streaminfo->m_pAudioThr, NULL);
 	SDL_WaitThread(pstrct_streaminfo->m_pAudioRefreshThr, NULL);
 	SDL_WaitThread(pstrct_streaminfo->m_pVideoThr, NULL);
@@ -1308,7 +1322,7 @@ int push_thr(LPVOID lpParam)
 	AVPacket pkt_out;//声音包
 	AVFrame *frame;//声音帧
 	while (1){
-		if (pThis->m_blOut){
+		if (pStrctStreamInfo->m_iAbortRequest){
 			break;
 		}
 		if (av_compare_ts(cur_pts_v, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base,
@@ -1432,7 +1446,6 @@ void CLS_DlgStreamPusher::OnBnClickedOk()
 		MessageBox(_T("请输入正确的推流地址！\n"));
 		return;
 	}
-	//ffmpeg - r 25 - f dshow - s 640×480 - i video = ”video source name” : audio = ”audio source name” - vcodec libx264 - b 600k - vpre slow - acodec libfaac - ab 128k - f flv rtmp ://server/application/stream_name
 	if (OpenCamera() < 0){
 		TRACE("OpenCamera failed!/n");
 		goto END;
@@ -1477,47 +1490,6 @@ void CLS_DlgStreamPusher::OnBnClickedOk()
 	m_blPushStream = TRUE;
 
 END:
-	/*if (NULL != m_pStreamInfo){
-		if (m_pStreamInfo->m_pVideoSwsCtx){
-			sws_freeContext(m_pStreamInfo->m_pVideoSwsCtx);
-		}
-		if (m_pStreamInfo->m_pVideoFrameShowYUV){
-			av_frame_free(&m_pStreamInfo->m_pVideoFrameShowYUV);
-		}
-		if (m_pStreamInfo->m_pVideoFramePushYUV){
-			av_frame_free(&m_pStreamInfo->m_pVideoFramePushYUV);
-		}
-		if (m_pStreamInfo->m_pVideoFrame){
-			av_frame_free(&m_pStreamInfo->m_pVideoFrame);
-		}
-		if (m_pStreamInfo->m_pAudioMutex){
-			SDL_DestroyMutex(m_pStreamInfo->m_pAudioMutex);
-		}
-		if (m_pStreamInfo->m_pVideoMutex){
-			SDL_DestroyMutex(m_pStreamInfo->m_pVideoMutex);
-		}
-
-	}
-
-	if (NULL != m_pFmtVideoCtx){
-		avformat_close_input(&m_pFmtVideoCtx);
-	}
-
-	if (NULL != m_pFmtAudioCtx){
-		avformat_close_input(&m_pFmtAudioCtx);
-	}
-
-	if (NULL != m_pFmtRtmpCtx){
-		if (!(m_pFmtRtmpCtx->flags & AVFMT_NOFILE)){
-			avio_close(m_pFmtRtmpCtx->pb);
-		}
-		avformat_free_context(m_pFmtRtmpCtx);
-	}
-
-	if (NULL != m_pPictureBuf){
-		av_free(m_pPictureBuf);
-	}*/
-
 	return;
 }
 

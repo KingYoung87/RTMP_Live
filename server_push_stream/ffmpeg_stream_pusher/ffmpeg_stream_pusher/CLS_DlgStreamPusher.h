@@ -335,7 +335,6 @@ public:
 	BOOL										m_blVideoShow;	//是否显示视频
 	BOOL										m_blAudioShow;	//是否显示音频
 	BOOL										m_blPushStream;	//是否进行推流
-	BOOL										m_blOut;			//是否退出程序
 	CString									m_cstrPushAddr;	//推流地址
 	AVFormatContext						   *m_pFmtVideoCtx;	//视频采集format
 	AVFormatContext						   *m_pFmtAudioCtx;	//音频采集format
