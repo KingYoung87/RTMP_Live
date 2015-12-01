@@ -12,3 +12,9 @@ del *.r39/s
 del *.dep/s
 del *.pdb/s
 del *.sdf/s
+
+del ipch\*.*/s/q
+rd  ipch/s/q
+
+del ffmpeg_stream_pusher\Debug\*.*/s/q
+rd ffmpeg_stream_pusher\Debug/s/q
