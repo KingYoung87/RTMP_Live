@@ -88,7 +88,6 @@ BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
 	ON_BN_CLICKED(IDC_BTN_PREVIEW, &CLS_DlgStreamPusher::OnBnClickedBtnPreview)
 	ON_BN_CLICKED(IDCANCEL, &CLS_DlgStreamPusher::OnBnClickedCancel)
 	ON_WM_CTLCOLOR()
-	ON_BN_CLICKED(IDC_BTN_DEVICE_VIDEO_TEST, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTest)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_AUDIO_TEST, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTest)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_AUDIO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTestStop)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_VIDEO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop)
@@ -218,16 +217,16 @@ static int audio_refresh_thread(void *opaque)
 		TRACE("NULL == pstrct_stream\n");
 		return -1;
 	}
-	while (!pstrct_stream->m_abort_request) {
+	while (!pstrct_stream->m_iAbortRequest) {
 		SDL_Event event;
 		event.type = FF_AUDIO_REFRESH_EVENT;
 		event.user.data1 = opaque;
-		if (!pstrct_stream->m_refresh) {
-			pstrct_stream->m_refresh = 1;
+		if (!pstrct_stream->m_iRefresh) {
+			pstrct_stream->m_iRefresh = 1;
 			SDL_PushEvent(&event);
 		}
 		//FIXME ideally we should wait the correct time but SDLs event passing is so slow it would be silly
-		av_usleep(pstrct_stream->m_pAudioStream && pstrct_stream->m_show_mode != SHOW_MODE_VIDEO ? 20 * 1000 : 5000);
+		av_usleep(pstrct_stream->m_pAudioStream && pstrct_stream->m_iShowMode != SHOW_MODE_VIDEO ? 20 * 1000 : 5000);
 	}
 	return 0;
 }
@@ -239,13 +238,13 @@ static int video_refresh_thread(void *opaque)
 		TRACE("NULL == pstrct_streaminfo");
 		return -1;
 	}
-	while (!pstrct_streaminfo->m_abort_request) {
+	while (!pstrct_streaminfo->m_iAbortRequest) {
 		SDL_Event event;
 		event.type = FF_VIDEO_REFRESH_EVENT;
 		SDL_PushEvent(&event);
 	}
 	SDL_Delay(40);
-	pstrct_streaminfo->m_abort_request = 0;
+	pstrct_streaminfo->m_iAbortRequest = 0;
 	SDL_Event event;
 	event.type = FF_BREAK_EVENT;
 	SDL_PushEvent(&event);
@@ -256,7 +255,7 @@ static int video_refresh_thread(void *opaque)
 UINT Thread_Event(LPVOID lpParam){
 	CLS_DlgStreamPusher *dlg = (CLS_DlgStreamPusher *)lpParam;
 	if (dlg != NULL){
-		dlg->event_loop(dlg->m_pStreamInfo);
+		dlg->EventLoop(dlg->m_pStreamInfo);
 	}
 	return 0;
 }
@@ -343,24 +342,24 @@ void CLS_DlgStreamPusher::InitDlgItem()
 	if (hWnd != NULL)
 	{
 		if (m_pStreamInfo != NULL){
-			m_pStreamInfo->m_show_screen = SDL_CreateWindowFrom((void*)hWnd);
-			if (m_pStreamInfo->m_show_screen == NULL){
+			m_pStreamInfo->m_pShowScreen = SDL_CreateWindowFrom((void*)hWnd);
+			if (m_pStreamInfo->m_pShowScreen == NULL){
 				TRACE("SDL_CreateWindowFrom ERR(%d)\n", SDL_GetError());
 				return;
 			}
 
 			RECT rectDisPlay;
 			this->GetDlgItem(IDC_STC_PREVIEW)->GetWindowRect(&rectDisPlay);
-			m_pStreamInfo->m_xleft = rectDisPlay.left;
-			m_pStreamInfo->m_ytop = rectDisPlay.top;
+			m_pStreamInfo->m_xLeft = rectDisPlay.left;
+			m_pStreamInfo->m_yTop = rectDisPlay.top;
 			m_pStreamInfo->m_width = rectDisPlay.right - rectDisPlay.left;
 			m_pStreamInfo->m_height = rectDisPlay.bottom - rectDisPlay.top;
 
 			//处理显示区域
 			FillDisplayRect();
 
-			m_pStreamInfo->m_sdlRenderer = SDL_CreateRenderer(m_pStreamInfo->m_show_screen, -1, 0);
-			if (m_pStreamInfo->m_sdlRenderer == NULL){
+			m_pStreamInfo->m_pSdlRender = SDL_CreateRenderer(m_pStreamInfo->m_pShowScreen, -1, 0);
+			if (m_pStreamInfo->m_pSdlRender == NULL){
 				TRACE("SDL_CreateRenderer--sdlRenderer == NULL err(%d)\n", SDL_GetError());
 				return;
 			}
@@ -402,16 +401,16 @@ void CLS_DlgStreamPusher::UnInitInfo()
 		m_pPushThrid = NULL;
 	}
 	if (NULL != m_pStreamInfo){
-		if (m_pStreamInfo->m_video_tid){
-			SDL_WaitThread(m_pStreamInfo->m_video_tid, NULL);
-			m_pStreamInfo->m_video_tid = NULL;
+		if (m_pStreamInfo->m_pVideoThr){
+			SDL_WaitThread(m_pStreamInfo->m_pVideoThr, NULL);
+			m_pStreamInfo->m_pVideoThr = NULL;
 		}
-		if (m_pStreamInfo->m_audio_tid){
-			SDL_WaitThread(m_pStreamInfo->m_audio_tid, NULL);
-			m_pStreamInfo->m_audio_tid = NULL;
+		if (m_pStreamInfo->m_pAudioThr){
+			SDL_WaitThread(m_pStreamInfo->m_pAudioThr, NULL);
+			m_pStreamInfo->m_pAudioThr = NULL;
 		}
-		if (m_pStreamInfo->m_video_sws_ctx){
-			sws_freeContext(m_pStreamInfo->m_video_sws_ctx);
+		if (m_pStreamInfo->m_pVideoSwsCtx){
+			sws_freeContext(m_pStreamInfo->m_pVideoSwsCtx);
 		}
 		if (m_pStreamInfo->m_pVideoFrameShowYUV){
 			av_frame_free(&m_pStreamInfo->m_pVideoFrameShowYUV);
@@ -597,7 +596,7 @@ int video_thr(LPVOID lpParam)
 				goto END;
 			}
 
-			if (sws_scale(strct_streaminfo->m_video_sws_ctx, (const uint8_t* const*)pFrame->data, pFrame->linesize, 0, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height,
+			if (sws_scale(strct_streaminfo->m_pVideoSwsCtx, (const uint8_t* const*)pFrame->data, pFrame->linesize, 0, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height,
 				picture->data, picture->linesize) < 0){
 				TRACE("sws_scale < 0");
 				goto END;
@@ -622,25 +621,20 @@ END:
 	return iRet;
 }
 
-void CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTest()
-{
-	m_pStreamInfo->m_itest_start = 1;
-}
-
 void UpdateSampleDisplay(struct_stream_info *_pstrct_streaminfo, short *samples, int samples_size)//CLS_DlgStreamPusher::
 {
 	int size, len;
 
 	size = samples_size / sizeof(short);
 	while (size > 0) {
-		len = SAMPLE_ARRAY_SIZE - _pstrct_streaminfo->m_sample_array_index;
+		len = SAMPLE_ARRAY_SIZE - _pstrct_streaminfo->m_iSampleArrayIndex;
 		if (len > size)
 			len = size;
-		memcpy(_pstrct_streaminfo->m_sample_array + _pstrct_streaminfo->m_sample_array_index, samples, len * sizeof(short));
+		memcpy(_pstrct_streaminfo->m_iSampleArray + _pstrct_streaminfo->m_iSampleArrayIndex, samples, len * sizeof(short));
 		samples += len;
-		_pstrct_streaminfo->m_sample_array_index += len;
-		if (_pstrct_streaminfo->m_sample_array_index >= SAMPLE_ARRAY_SIZE)
-			_pstrct_streaminfo->m_sample_array_index = 0;
+		_pstrct_streaminfo->m_iSampleArrayIndex += len;
+		if (_pstrct_streaminfo->m_iSampleArrayIndex >= SAMPLE_ARRAY_SIZE)
+			_pstrct_streaminfo->m_iSampleArrayIndex = 0;
 		size -= len;
 	}
 }
@@ -654,7 +648,7 @@ void  fill_audio(void *udata, Uint8 *stream, int len)//CLS_DlgStreamPusher::
 	}
 	audio_callback_time = av_gettime();
 
-	int frame_size = av_samples_get_buffer_size(NULL, struct_stream->m_audio_tgt.channels, 1, struct_stream->m_audio_tgt.fmt, 1);
+	int frame_size = av_samples_get_buffer_size(NULL, struct_stream->m_AudioPrm.channels, 1, struct_stream->m_AudioPrm.fmt, 1);
 	int len1 = 0;
 
 	if (audio_len == 0)	/*  Only  play  if  we  have  data  left  */
@@ -662,31 +656,31 @@ void  fill_audio(void *udata, Uint8 *stream, int len)//CLS_DlgStreamPusher::
 	len = (len>audio_len ? audio_len : len);	/*  Mix as  much  data  as  possible  */
 
 	while (len > 0 && audio_len > 0){
-		if (struct_stream->m_audio_buf_index >= struct_stream->m_audio_buf_size){
-			if (struct_stream->m_aduio_pkt_size < 0){
-				struct_stream->m_audio_buf = struct_stream->m_silence_buf;
-				struct_stream->m_audio_buf_size = sizeof(struct_stream->m_silence_buf) / frame_size * frame_size;
+		if (struct_stream->m_iAudioBufIndex >= struct_stream->m_iAudioBufSize){
+			if (struct_stream->m_iAduioPktSize < 0){
+				struct_stream->m_pAudioBuf = struct_stream->m_uSilenceBuf;
+				struct_stream->m_iAudioBufSize = sizeof(struct_stream->m_uSilenceBuf) / frame_size * frame_size;
 			}
 			else{
-				if (struct_stream->m_show_mode == SHOW_MODE_WAVES){
-					UpdateSampleDisplay(struct_stream, (int16_t *)struct_stream->m_audio_buf, struct_stream->m_aduio_pkt_size);
+				if (struct_stream->m_iShowMode == SHOW_MODE_WAVES){
+					UpdateSampleDisplay(struct_stream, (int16_t *)struct_stream->m_pAudioBuf, struct_stream->m_iAduioPktSize);
 				}
-				struct_stream->m_audio_buf_size = struct_stream->m_aduio_pkt_size;
+				struct_stream->m_iAudioBufSize = struct_stream->m_iAduioPktSize;
 			}
 		}
 
-		len1 = struct_stream->m_audio_buf_size - struct_stream->m_audio_buf_index;
+		len1 = struct_stream->m_iAudioBufSize - struct_stream->m_iAudioBufIndex;
 		if (len1 > len)
 			len1 = len;
-		memcpy(stream, (uint8_t *)struct_stream->m_audio_buf + struct_stream->m_audio_buf_index, len1);
+		memcpy(stream, (uint8_t *)struct_stream->m_pAudioBuf + struct_stream->m_iAudioBufIndex, len1);
 		audio_len -= len;
 		len -= len1;
 		stream += len1;
-		struct_stream->m_audio_buf_index += len1;
+		struct_stream->m_iAudioBufIndex += len1;
 	}
 	audio_len = 0;
 
-	struct_stream->m_audio_write_buf_size = struct_stream->m_audio_buf_size - struct_stream->m_audio_buf_index;
+	struct_stream->m_iAudioWriteBufSize = struct_stream->m_iAudioBufSize - struct_stream->m_iAudioBufIndex;
 }
 
 int audio_thr(LPVOID lpParam)
@@ -780,13 +774,12 @@ END:
 void CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTest()
 {
 	m_blAudioShow = TRUE;
-	m_pStreamInfo->m_itest_start = 1;
 
 	//创建纹理
-	m_pStreamInfo->m_sdlTexture = SDL_CreateTexture(m_pStreamInfo->m_sdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
+	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
 
 	//开启audio测试线程
-	m_pStreamInfo->m_show_mode = SHOW_MODE_WAVES;
+	m_pStreamInfo->m_iShowMode = SHOW_MODE_WAVES;
 }
 
 void CLS_DlgStreamPusher::InitData()
@@ -805,12 +798,12 @@ void CLS_DlgStreamPusher::InitData()
 		return;
 	}
 
-	m_pStreamInfo->m_audio_tid = NULL;
-	m_pStreamInfo->m_video_tid = NULL;
-	m_pStreamInfo->m_show_screen = NULL;
-	m_pStreamInfo->m_screen_surface = NULL;
-	m_pStreamInfo->m_xleft = 0;
-	m_pStreamInfo->m_ytop = 0;
+	m_pStreamInfo->m_pAudioThr = NULL;
+	m_pStreamInfo->m_pVideoThr = NULL;
+	m_pStreamInfo->m_pShowScreen = NULL;
+	m_pStreamInfo->m_pScreenSurface = NULL;
+	m_pStreamInfo->m_xLeft = 0;
+	m_pStreamInfo->m_yTop = 0;
 	m_pStreamInfo->m_width = 0;
 	m_pStreamInfo->m_height = 0;
 	m_pStreamInfo->m_pAudioStream = NULL;
@@ -821,18 +814,16 @@ void CLS_DlgStreamPusher::InitData()
 	m_pStreamInfo->m_pVideoStream = NULL;
 	m_pStreamInfo->m_pAudioFrame = NULL;
 	m_pStreamInfo->m_pVideoFrame = NULL;
-	m_pStreamInfo->m_audio_swr_ctx = NULL;
-	m_pStreamInfo->m_audio_buf = NULL;
-	m_pStreamInfo->m_audio_buf_size = 0;
-	m_pStreamInfo->m_audio_buf_index = 0;
-	m_pStreamInfo->m_aduio_pkt_size = 0;
-	m_pStreamInfo->m_sample_array_index = 0;
-	m_pStreamInfo->m_abort_request = 0;
-	m_pStreamInfo->m_refresh = 0;
-	m_pStreamInfo->m_show_mode = SHOW_MODE_NONE;
-	m_pStreamInfo->m_audio_refresh_tid = NULL;
-	m_pStreamInfo->m_video_refresh_tid = NULL;
-	m_pStreamInfo->m_itest_start = 0;
+	m_pStreamInfo->m_pAudioBuf = NULL;
+	m_pStreamInfo->m_iAudioBufSize = 0;
+	m_pStreamInfo->m_iAudioBufIndex = 0;
+	m_pStreamInfo->m_iAduioPktSize = 0;
+	m_pStreamInfo->m_iSampleArrayIndex = 0;
+	m_pStreamInfo->m_iAbortRequest = 0;
+	m_pStreamInfo->m_iRefresh = 0;
+	m_pStreamInfo->m_iShowMode = SHOW_MODE_NONE;
+	m_pStreamInfo->m_pAudioRefreshThr = NULL;
+	m_pStreamInfo->m_pVideoRefreshThr = NULL;
 
 	m_pThreadEvent = NULL;
 }
@@ -876,22 +867,22 @@ void CLS_DlgStreamPusher::FillDisplayRect()
 		return;
 	}
 
-	streamInfo->m_screen_surface = SDL_GetWindowSurface(streamInfo->m_show_screen);
-	if (NULL == streamInfo->m_screen_surface){
-		TRACE("NULL == streamInfo->m_screen_surface");
+	streamInfo->m_pScreenSurface = SDL_GetWindowSurface(streamInfo->m_pShowScreen);
+	if (NULL == streamInfo->m_pScreenSurface){
+		TRACE("NULL == streamInfo->m_pScreenSurface");
 		return;
 	}
 
 	//背景色
-	int bgcolor = SDL_MapRGB(streamInfo->m_screen_surface->format, 0x00, 0x00, 0x00);
-	fill_rec(streamInfo->m_screen_surface, m_pStreamInfo->m_xleft, m_pStreamInfo->m_ytop, m_pStreamInfo->m_width, m_pStreamInfo->m_height,bgcolor);
+	int bgcolor = SDL_MapRGB(streamInfo->m_pScreenSurface->format, 0x00, 0x00, 0x00);
+	FillRec(streamInfo->m_pScreenSurface, m_pStreamInfo->m_xLeft, m_pStreamInfo->m_yTop, m_pStreamInfo->m_width, m_pStreamInfo->m_height, bgcolor);
 
-	if (SDL_UpdateWindowSurface(streamInfo->m_show_screen) != 0){
+	if (SDL_UpdateWindowSurface(streamInfo->m_pShowScreen) != 0){
 		TRACE("SDL_UpdateWindowSurface ERR");
 	}
 }
 
-void CLS_DlgStreamPusher::event_loop(struct_stream_info *_pstrct_streaminfo)
+void CLS_DlgStreamPusher::EventLoop(struct_stream_info *_pstrct_streaminfo)
 {
 	if (NULL == _pstrct_streaminfo){
 		TRACE("NULL == _pstrct_streaminfo");
@@ -905,22 +896,22 @@ void CLS_DlgStreamPusher::event_loop(struct_stream_info *_pstrct_streaminfo)
 		break;
 		double x;
 		//判断退出
-		if (_pstrct_streaminfo->m_abort_request){
+		if (_pstrct_streaminfo->m_iAbortRequest){
 			break;
 		}
 
 		SDL_WaitEvent(&event);
 		switch (event.type) {
 		case FF_AUDIO_REFRESH_EVENT:
-			screen_refresh(event.user.data1);
-			_pstrct_streaminfo->m_refresh = 0;
+			RefreshScreen(event.user.data1);
+			_pstrct_streaminfo->m_iRefresh = 0;
 			break;
 		case FF_VIDEO_REFRESH_EVENT:
 			break;
 		case FF_BREAK_EVENT:
 			break;
 		case FF_QUIT_EVENT:
-			stream_stop(event.user.data1);
+			StopStream(event.user.data1);
 			break;
 		default:
 			break;
@@ -928,7 +919,7 @@ void CLS_DlgStreamPusher::event_loop(struct_stream_info *_pstrct_streaminfo)
 	}
 }
 
-void CLS_DlgStreamPusher::screen_refresh(void *opaque)
+void CLS_DlgStreamPusher::RefreshScreen(void *opaque)
 {
 	struct_stream_info* strct_streaminfo = (struct_stream_info*)opaque;
 	if (NULL == strct_streaminfo){
@@ -936,20 +927,20 @@ void CLS_DlgStreamPusher::screen_refresh(void *opaque)
 		return;
 	}
 
-	screen_display(strct_streaminfo);
+	DisplayScreen(strct_streaminfo);
 }
 
-void CLS_DlgStreamPusher::screen_display(struct_stream_info *_pstrct_streaminfo)
+void CLS_DlgStreamPusher::DisplayScreen(struct_stream_info *_pstrct_streaminfo)
 {
-	if (_pstrct_streaminfo->m_pAudioFrame && _pstrct_streaminfo->m_show_mode != SHOW_MODE_VIDEO){
-		audio_display(_pstrct_streaminfo);
+	if (_pstrct_streaminfo->m_pAudioFrame && _pstrct_streaminfo->m_iShowMode != SHOW_MODE_VIDEO){
+		DisplayAudio(_pstrct_streaminfo);
 	}
 	else{
-		video_display(_pstrct_streaminfo);
+		DisplayVideo(_pstrct_streaminfo);
 	}
 }
 
-void CLS_DlgStreamPusher::audio_display(struct_stream_info *_pstrct_streaminfo)
+void CLS_DlgStreamPusher::DisplayAudio(struct_stream_info *_pstrct_streaminfo)
 {
 	if (audio_callback_time == 0){
 		TRACE("audio_callback_time == 0");
@@ -965,34 +956,34 @@ void CLS_DlgStreamPusher::audio_display(struct_stream_info *_pstrct_streaminfo)
 	nb_freq = 1 << (rdft_bits - 1);
 
 	/* compute display index : center on currently output samples */
-	channels = _pstrct_streaminfo->m_audio_tgt.channels;
+	channels = _pstrct_streaminfo->m_AudioPrm.channels;
 	nb_display_channels = channels;
-	if (!_pstrct_streaminfo->m_paused) {
-		int data_used = _pstrct_streaminfo->m_show_mode == SHOW_MODE_WAVES ? _pstrct_streaminfo->m_width : (2 * nb_freq);
+	if (!_pstrct_streaminfo->m_iPaused) {
+		int data_used = _pstrct_streaminfo->m_iShowMode == SHOW_MODE_WAVES ? _pstrct_streaminfo->m_width : (2 * nb_freq);
 		n = 2 * channels;
-		delay = _pstrct_streaminfo->m_audio_write_buf_size;
+		delay = _pstrct_streaminfo->m_iAudioWriteBufSize;
 		delay /= n;
 
 		/* to be more precise, we take into account the time spent since
 		the last buffer computation */
 		if (audio_callback_time) {
 			time_diff = av_gettime() - audio_callback_time;
-			delay -= (time_diff * _pstrct_streaminfo->m_audio_tgt.freq) / 1000000;
+			delay -= (time_diff * _pstrct_streaminfo->m_AudioPrm.freq) / 1000000;
 		}
 
 		delay += 2 * data_used;
 		if (delay < data_used)
 			delay = data_used;
 
-		i_start = x = compute_mod(_pstrct_streaminfo->m_sample_array_index - delay * channels, SAMPLE_ARRAY_SIZE);
-		if (_pstrct_streaminfo->m_show_mode == SHOW_MODE_WAVES) {
+		i_start = x = compute_mod(_pstrct_streaminfo->m_iSampleArrayIndex - delay * channels, SAMPLE_ARRAY_SIZE);
+		if (_pstrct_streaminfo->m_iShowMode == SHOW_MODE_WAVES) {
 			h = INT_MIN;
 			for (i = 0; i < 1000; i += channels) {
 				int idx = (SAMPLE_ARRAY_SIZE + x - i) % SAMPLE_ARRAY_SIZE;
-				int a = _pstrct_streaminfo->m_sample_array[idx];
-				int b = _pstrct_streaminfo->m_sample_array[(idx + 4 * channels) % SAMPLE_ARRAY_SIZE];
-				int c = _pstrct_streaminfo->m_sample_array[(idx + 5 * channels) % SAMPLE_ARRAY_SIZE];
-				int d = _pstrct_streaminfo->m_sample_array[(idx + 9 * channels) % SAMPLE_ARRAY_SIZE];
+				int a = _pstrct_streaminfo->m_iSampleArray[idx];
+				int b = _pstrct_streaminfo->m_iSampleArray[(idx + 4 * channels) % SAMPLE_ARRAY_SIZE];
+				int c = _pstrct_streaminfo->m_iSampleArray[(idx + 5 * channels) % SAMPLE_ARRAY_SIZE];
+				int d = _pstrct_streaminfo->m_iSampleArray[(idx + 9 * channels) % SAMPLE_ARRAY_SIZE];
 				int score = a - d;
 				if (h < score && (b ^ c) < 0) {
 					h = score;
@@ -1001,24 +992,24 @@ void CLS_DlgStreamPusher::audio_display(struct_stream_info *_pstrct_streaminfo)
 			}
 		}
 
-		_pstrct_streaminfo->m_audio_last_i_start = i_start;
+		_pstrct_streaminfo->m_iAudioLastStart = i_start;
 	}
 
 
 	//背景色
-	bgcolor = SDL_MapRGB(_pstrct_streaminfo->m_screen_surface->format, 0x00, 0x00, 0x00);
-	if (_pstrct_streaminfo->m_show_mode == SHOW_MODE_WAVES) {
+	bgcolor = SDL_MapRGB(_pstrct_streaminfo->m_pScreenSurface->format, 0x00, 0x00, 0x00);
+	if (_pstrct_streaminfo->m_iShowMode == SHOW_MODE_WAVES) {
 		SDL_Rect sdl_rect;
-		_pstrct_streaminfo->m_xleft = 0;
-		_pstrct_streaminfo->m_ytop = 0;
-		sdl_rect.x = _pstrct_streaminfo->m_xleft;
-		sdl_rect.y = _pstrct_streaminfo->m_ytop;
+		_pstrct_streaminfo->m_xLeft = 0;
+		_pstrct_streaminfo->m_yTop = 0;
+		sdl_rect.x = _pstrct_streaminfo->m_xLeft;
+		sdl_rect.y = _pstrct_streaminfo->m_yTop;
 		sdl_rect.w = _pstrct_streaminfo->m_width;
 		sdl_rect.h = _pstrct_streaminfo->m_height;
 
-		fill_rec(_pstrct_streaminfo->m_screen_surface, _pstrct_streaminfo->m_xleft, _pstrct_streaminfo->m_ytop, _pstrct_streaminfo->m_width, _pstrct_streaminfo->m_height,bgcolor);
+		FillRec(_pstrct_streaminfo->m_pScreenSurface, _pstrct_streaminfo->m_xLeft, _pstrct_streaminfo->m_yTop, _pstrct_streaminfo->m_width, _pstrct_streaminfo->m_height, bgcolor);
 
-		fgcolor = SDL_MapRGB(_pstrct_streaminfo->m_screen_surface->format, 0xff, 0xff, 0xff);
+		fgcolor = SDL_MapRGB(_pstrct_streaminfo->m_pScreenSurface->format, 0xff, 0xff, 0xff);
 
 		/* total height for one channel */
 		h = _pstrct_streaminfo->m_height / nb_display_channels;
@@ -1026,9 +1017,9 @@ void CLS_DlgStreamPusher::audio_display(struct_stream_info *_pstrct_streaminfo)
 		h2 = (h * 9) / 20;
 		for (ch = 0; ch < nb_display_channels; ch++) {
 			i = i_start + ch;
-			y1 = _pstrct_streaminfo->m_ytop + ch * h + (h / 2); /* position of center line */
+			y1 = _pstrct_streaminfo->m_yTop + ch * h + (h / 2); /* position of center line */
 			for (x = 0; x < _pstrct_streaminfo->m_width; x++) {
-				y = (_pstrct_streaminfo->m_sample_array[i] * h2) >> 15;
+				y = (_pstrct_streaminfo->m_iSampleArray[i] * h2) >> 15;
 				if (y < 0) {
 					y = -y;
 					ys = y1 - y;
@@ -1037,7 +1028,7 @@ void CLS_DlgStreamPusher::audio_display(struct_stream_info *_pstrct_streaminfo)
 					ys = y1;
 				}
 
-				fill_rec(_pstrct_streaminfo->m_screen_surface, _pstrct_streaminfo->m_xleft + x, ys, 1, y, fgcolor);
+				FillRec(_pstrct_streaminfo->m_pScreenSurface, _pstrct_streaminfo->m_xLeft + x, ys, 1, y, fgcolor);
 
 				i += channels;
 				if (i >= SAMPLE_ARRAY_SIZE)
@@ -1045,30 +1036,30 @@ void CLS_DlgStreamPusher::audio_display(struct_stream_info *_pstrct_streaminfo)
 			}
 		}
 
-		fgcolor = SDL_MapRGB(_pstrct_streaminfo->m_screen_surface->format, 0x00, 0x00, 0xff);
+		fgcolor = SDL_MapRGB(_pstrct_streaminfo->m_pScreenSurface->format, 0x00, 0x00, 0xff);
 
 		for (ch = 1; ch < nb_display_channels; ch++) {
-			y = _pstrct_streaminfo->m_ytop + ch * h;
+			y = _pstrct_streaminfo->m_yTop + ch * h;
 
-			fill_rec(_pstrct_streaminfo->m_screen_surface, _pstrct_streaminfo->m_xleft, y, _pstrct_streaminfo->m_width, 1, fgcolor);
+			FillRec(_pstrct_streaminfo->m_pScreenSurface, _pstrct_streaminfo->m_xLeft, y, _pstrct_streaminfo->m_width, 1, fgcolor);
 		}
-		if (SDL_UpdateWindowSurface(_pstrct_streaminfo->m_show_screen) != 0){
+		if (SDL_UpdateWindowSurface(_pstrct_streaminfo->m_pShowScreen) != 0){
 			TRACE("SDL_UpdateWindowSurface ERR");
 		}
 		//SDL_CreateRGBSurface();
-		SDL_UpdateTexture(_pstrct_streaminfo->m_sdlTexture, NULL, _pstrct_streaminfo->m_screen_surface->pixels, _pstrct_streaminfo->m_screen_surface->pitch);
-		SDL_RenderClear(_pstrct_streaminfo->m_sdlRenderer);
-		SDL_RenderCopy(_pstrct_streaminfo->m_sdlRenderer, _pstrct_streaminfo->m_sdlTexture, &sdl_rect, &sdl_rect);
-		SDL_RenderPresent(_pstrct_streaminfo->m_sdlRenderer);
+		SDL_UpdateTexture(_pstrct_streaminfo->m_pSdlTexture, NULL, _pstrct_streaminfo->m_pScreenSurface->pixels, _pstrct_streaminfo->m_pScreenSurface->pitch);
+		SDL_RenderClear(_pstrct_streaminfo->m_pSdlRender);
+		SDL_RenderCopy(_pstrct_streaminfo->m_pSdlRender, _pstrct_streaminfo->m_pSdlTexture, &sdl_rect, &sdl_rect);
+		SDL_RenderPresent(_pstrct_streaminfo->m_pSdlRender);
 	}
 }
 
-void CLS_DlgStreamPusher::video_display(struct_stream_info *_pstrct_streaminfo)
+void CLS_DlgStreamPusher::DisplayVideo(struct_stream_info *_pstrct_streaminfo)
 {
 
 }
 
-void CLS_DlgStreamPusher::fill_rec(SDL_Surface *screen,
+void CLS_DlgStreamPusher::FillRec(SDL_Surface *screen,
 	int x, int y, int w, int h, int color)
 {
 	if (NULL == screen){
@@ -1097,10 +1088,10 @@ void CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTestStop()
 		return;
 	}
 	m_blAudioShow = FALSE;
-	stop_test();
+	StopTest();
 	SDL_CloseAudio();
 
-	m_pStreamInfo->m_audio_tid = NULL;
+	m_pStreamInfo->m_pAudioThr = NULL;
 }
 
 void CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop()
@@ -1117,7 +1108,7 @@ void CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop()
 	m_blVideoShow = FALSE;
 }
 
-void CLS_DlgStreamPusher::stop_test()
+void CLS_DlgStreamPusher::StopTest()
 {
 	SDL_Event event;
 	event.type = FF_QUIT_EVENT;
@@ -1127,7 +1118,7 @@ void CLS_DlgStreamPusher::stop_test()
 	}
 }
 
-void CLS_DlgStreamPusher::stream_stop(void *opaque)
+void CLS_DlgStreamPusher::StopStream(void *opaque)
 {
 	struct_stream_info* pstrct_streaminfo = (struct_stream_info*)opaque;
 	if (NULL == pstrct_streaminfo){
@@ -1136,16 +1127,16 @@ void CLS_DlgStreamPusher::stream_stop(void *opaque)
 	}
 
 	//做停止流推送的操作
-	pstrct_streaminfo->m_abort_request = 1;
-	SDL_WaitThread(pstrct_streaminfo->m_audio_tid, NULL);
-	SDL_WaitThread(pstrct_streaminfo->m_audio_refresh_tid, NULL);
-	SDL_WaitThread(pstrct_streaminfo->m_video_tid, NULL);
-	SDL_WaitThread(pstrct_streaminfo->m_video_refresh_tid, NULL);
+	pstrct_streaminfo->m_iAbortRequest = 1;
+	SDL_WaitThread(pstrct_streaminfo->m_pAudioThr, NULL);
+	SDL_WaitThread(pstrct_streaminfo->m_pAudioRefreshThr, NULL);
+	SDL_WaitThread(pstrct_streaminfo->m_pVideoThr, NULL);
+	SDL_WaitThread(pstrct_streaminfo->m_pVideoRefreshThr, NULL);
 
-	pstrct_streaminfo->m_audio_tid = NULL;
-	pstrct_streaminfo->m_video_tid = NULL;
-	pstrct_streaminfo->m_audio_refresh_tid = NULL;
-	pstrct_streaminfo->m_video_refresh_tid = NULL;
+	pstrct_streaminfo->m_pAudioThr = NULL;
+	pstrct_streaminfo->m_pVideoThr = NULL;
+	pstrct_streaminfo->m_pAudioRefreshThr = NULL;
+	pstrct_streaminfo->m_pVideoRefreshThr = NULL;
 }
 
 void CLS_DlgStreamPusher::OnBnClickedChkShowVideo()
@@ -1466,17 +1457,17 @@ void CLS_DlgStreamPusher::OnBnClickedOk()
 	}
 
 	//开启视频采集线程
-	if (m_pStreamInfo->m_video_tid == NULL){
-		m_pStreamInfo->m_video_tid = SDL_CreateThread(video_thr, NULL, (void*)this);
-		if (m_pStreamInfo->m_video_tid == NULL){
+	if (m_pStreamInfo->m_pVideoThr == NULL){
+		m_pStreamInfo->m_pVideoThr = SDL_CreateThread(video_thr, NULL, (void*)this);
+		if (m_pStreamInfo->m_pVideoThr == NULL){
 			TRACE("创建视频测试线程失败！\n");
 			goto END;
 		}
 	}
 
-	if (m_pStreamInfo->m_audio_tid == NULL){
-		m_pStreamInfo->m_audio_tid = SDL_CreateThread(audio_thr, NULL, (void*)this);
-		if (m_pStreamInfo->m_audio_tid == NULL){
+	if (m_pStreamInfo->m_pAudioThr == NULL){
+		m_pStreamInfo->m_pAudioThr = SDL_CreateThread(audio_thr, NULL, (void*)this);
+		if (m_pStreamInfo->m_pAudioThr == NULL){
 			TRACE("创建音频测试线程失败！\n");
 			goto END;
 		}
@@ -1487,8 +1478,8 @@ void CLS_DlgStreamPusher::OnBnClickedOk()
 
 END:
 	/*if (NULL != m_pStreamInfo){
-		if (m_pStreamInfo->m_video_sws_ctx){
-			sws_freeContext(m_pStreamInfo->m_video_sws_ctx);
+		if (m_pStreamInfo->m_pVideoSwsCtx){
+			sws_freeContext(m_pStreamInfo->m_pVideoSwsCtx);
 		}
 		if (m_pStreamInfo->m_pVideoFrameShowYUV){
 			av_frame_free(&m_pStreamInfo->m_pVideoFrameShowYUV);
@@ -1542,10 +1533,10 @@ int CLS_DlgStreamPusher::OpenCamera()
 	}
 
 	//创建纹理
-	m_pStreamInfo->m_sdlTexture = SDL_CreateTexture(m_pStreamInfo->m_sdlRenderer, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
+	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
 
 	//设置SDL显示模式
-	m_pStreamInfo->m_show_mode = SHOW_MODE_VIDEO;
+	m_pStreamInfo->m_iShowMode = SHOW_MODE_VIDEO;
 
 	//根据设备名称打开设备
 	char* psDevName = GetDeviceName(n_Video);
@@ -1562,7 +1553,7 @@ int CLS_DlgStreamPusher::OpenCamera()
 
 
 	//打开摄像头
-	m_pFmtVideoCtx = avformat_alloc_context();
+	//m_pFmtVideoCtx = avformat_alloc_context();
 	if (avformat_open_input(&m_pFmtVideoCtx, psDevName, pVideoInputFmt, NULL) != 0){
 		TRACE("avformat_open_input err!\n");
 		return iRet;
@@ -1603,14 +1594,14 @@ int CLS_DlgStreamPusher::OpenCamera()
 	m_pStreamInfo->m_pVideoFrame = av_frame_alloc();
 	m_pStreamInfo->m_pVideoFrameShowYUV = av_frame_alloc();
 	m_pStreamInfo->m_pVideoFramePushYUV = av_frame_alloc();
-	m_pStreamInfo->m_video_sws_ctx = sws_getContext(m_iVideoWidth, m_iVideoHeight, m_pCodecVideoCtx->pix_fmt,
+	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iVideoWidth, m_iVideoHeight, m_pCodecVideoCtx->pix_fmt,
 		m_iVideoWidth, m_iVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
-	if (NULL == m_pStreamInfo->m_video_sws_ctx){
-		TRACE("NULL == strct_streaminfo->m_video_sws_ctx\n");
+	if (NULL == m_pStreamInfo->m_pVideoSwsCtx){
+		TRACE("NULL == strct_streaminfo->m_pVideoSwsCtx\n");
 		return iRet;
 	}
 
-	m_pStreamInfo->m_video_refresh_tid = SDL_CreateThread(video_refresh_thread, NULL, m_pStreamInfo);
+	m_pStreamInfo->m_pVideoRefreshThr = SDL_CreateThread(video_refresh_thread, NULL, m_pStreamInfo);
 
 	//需要将采集信息写文件，打开解码器
 	pCodec = avcodec_find_decoder(m_pCodecVideoCtx->codec_id);

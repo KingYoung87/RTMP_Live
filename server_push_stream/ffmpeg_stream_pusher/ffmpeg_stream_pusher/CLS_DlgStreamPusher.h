@@ -77,47 +77,40 @@ enum ShowMode {
 };
 typedef struct stream_info{
 	AVFormatContext		*m_pFormatCtx;
-	SDL_Window			*m_show_screen;			//音视频显示SDL窗口
-	SDL_Surface			*m_screen_surface;		//与screen绑定的变量
-	int					 m_xleft;				//显示窗体的坐标及大小
-	int					 m_ytop;
+	SDL_Window			*m_pShowScreen;			//音视频显示SDL窗口
+	SDL_Surface			*m_pScreenSurface;		//与screen绑定的变量
+	int					 m_xLeft;				//显示窗体的坐标及大小
+	int					 m_yTop;
 	int					 m_width;
 	int					 m_height;
-	int					 m_abort_request;		//退出标记
-	int					 m_refresh;				//刷新标记
-	int					 m_show_mode;			//显示模式
-	int					 m_paused;				//暂停标记
-	int					 m_itest_start;			//测试标记
-	SDL_Renderer			*m_sdlRenderer;
-	SDL_Texture			*m_sdlTexture;
+	int					 m_iAbortRequest;		//退出标记
+	int					 m_iRefresh;				//刷新标记
+	int					 m_iShowMode;			//显示模式
+	int					 m_iPaused;				//暂停标记
+	SDL_Renderer			*m_pSdlRender;
+	SDL_Texture			*m_pSdlTexture;
 	/************************音频相关参数-start*********************/
-	SDL_Thread			*m_audio_tid;		//音频测试线程
-	SDL_Thread			*m_audio_refresh_tid;	//音频刷新线程句柄
-	AVStream				*m_pAudioStream;			//音频流
-	AVFrame				*m_pAudioFrame;			//音频帧
-	int					 m_content_out_channels;	//音频音道数
+	SDL_Thread			*m_pAudioThr;		//音频测试线程
+	SDL_Thread			*m_pAudioRefreshThr;	//音频刷新线程句柄
+	AVStream				*m_pAudioStream;		//音频流
+	AVFrame				*m_pAudioFrame;		//音频帧
 	AVAudioFifo			*m_pAudioFifo;
 	SDL_mutex			*m_pAudioMutex;
-	SwrContext			*m_audio_swr_ctx;
-	AudioParams			 m_audio_src;
-	AudioParams			 m_audio_tgt;
-	int					 m_audio_hw_buf_size;
-	uint8_t				*m_audio_buf;
-	int					 m_audio_buf_size;
-	int					 m_audio_buf_index;
-	int					 m_aduio_pkt_size;
-	int					 m_audio_write_buf_size;
-	int					 m_audio_last_i_start;
-	double				 m_audio_clock;
-	DECLARE_ALIGNED(16, uint8_t, m_audio_buf2)[MAX_AUDIO_FRAME_SIZE * 4];
-	uint8_t				 m_silence_buf[AUDIO_BUF_SIZE];
-	int16_t				 m_sample_array[SAMPLE_ARRAY_SIZE];
-	int					 m_sample_array_index;
+	AudioParams			 m_AudioPrm;
+	uint8_t				*m_pAudioBuf;
+	int					 m_iAudioBufSize;
+	int					 m_iAudioBufIndex;
+	int					 m_iAduioPktSize;
+	int					 m_iAudioWriteBufSize;
+	int					 m_iAudioLastStart;
+	uint8_t				 m_uSilenceBuf[AUDIO_BUF_SIZE];
+	int16_t				 m_iSampleArray[SAMPLE_ARRAY_SIZE];
+	int					 m_iSampleArrayIndex;
 	/************************音频相关参数-end***********************/
 
 	/************************视频相关参数-satrt*********************/
-	SDL_Thread			*m_video_tid;			//视频测试线程
-	SDL_Thread			*m_video_refresh_tid;	//视频刷新线程句柄
+	SDL_Thread			*m_pVideoThr;			//视频测试线程
+	SDL_Thread			*m_pVideoRefreshThr;		//视频刷新线程句柄
 	AVFifoBuffer			*m_pVideoFifo;
 	SDL_mutex			*m_pVideoMutex;
 	AVStream				*m_pVideoStream;			//视频流
@@ -126,7 +119,7 @@ typedef struct stream_info{
 	AVFrame				*m_pVideoFramePushYUV;	//视频帧的推送YUV
 	AVPacket				*m_pVideoPacket;			//视频包
 	uint8_t				*m_pVideoOutBuffer;		//视频输出缓存
-	SwsContext			*m_video_sws_ctx;
+	SwsContext			*m_pVideoSwsCtx;
 	
 	/************************视频相关参数-end***********************/
 }struct_stream_info;
@@ -163,7 +156,6 @@ public:
 	afx_msg void OnBnClickedBtnPreview();
 	afx_msg void OnBnClickedCancel();
 	afx_msg void OnBnClickedChkShowVideo();
-	afx_msg void OnBnClickedBtnDeviceVideoTest();
 	afx_msg void OnBnClickedBtnDeviceAudioTest();
 	afx_msg void OnBnClickedBtnDeviceAudioTestStop();
 	afx_msg void OnBnClickedBtnDeviceVideoTestStop();
@@ -245,28 +237,28 @@ private:
 	param : opaque:流参数信息
 	return:
 	**********************/
-	void screen_refresh(void *opaque);
+	void RefreshScreen(void *opaque);
 
 	/**********************
 	method: 窗体显示
 	param : _pstrct_streaminfo:流参数信息
 	return:
 	**********************/
-	void screen_display(struct_stream_info *_pstrct_streaminfo);
+	void DisplayScreen(struct_stream_info *_pstrct_streaminfo);
 
 	/**********************
 	method: 窗体显示音频波形
 	param : _pstrct_streaminfo:流参数信息
 	return:
 	**********************/
-	void audio_display(struct_stream_info *_pstrct_streaminfo);
+	void DisplayAudio(struct_stream_info *_pstrct_streaminfo);
 
 	/**********************
 	method: 窗体显示视频
 	param : _pstrct_streaminfo:流参数信息
 	return:
 	**********************/
-	void video_display(struct_stream_info *_pstrct_streaminfo);
+	void DisplayVideo(struct_stream_info *_pstrct_streaminfo);
 
 	/**********************
 	method: 窗体区域填充
@@ -278,21 +270,21 @@ private:
 			color:颜色值
 	return:
 	**********************/
-	static void fill_rec(SDL_Surface *screen,
+	static void FillRec(SDL_Surface *screen,
 		int x, int y, int w, int h, int color);
 
 	/**********************
 	method: 停止测试
 	return:
 	**********************/
-	void stop_test();
+	void StopTest();
 
 	/**********************
 	method: 停止流推送
 	param:	opaque:流信息
 	return:
 	**********************/
-	void stream_stop(void *opaque);
+	void StopStream(void *opaque);
 
 	/**********************
 	method: 打开摄像头
@@ -337,7 +329,7 @@ public:
 	param : _pstrct_streaminfo:流参数信息
 	return:
 	**********************/
-	void event_loop(struct_stream_info *_pstrct_streaminfo);
+	void EventLoop(struct_stream_info *_pstrct_streaminfo);
 
 	struct_stream_info*						m_pStreamInfo;	//音视频全局结构体
 	BOOL										m_blVideoShow;	//是否显示视频
