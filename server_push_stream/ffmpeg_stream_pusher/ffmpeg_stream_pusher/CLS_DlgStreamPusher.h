@@ -345,8 +345,10 @@ public:
 	int										m_iAudioIndex;	//音频采集解码器索引
 	int										m_iVideoOutIndex;//推送视频解码器索引
 	int										m_iAudioOutIndex;//推送音频解码器索引
-	int										m_iVideoHeight;	//视频高
-	int										m_iVideoWidth;	//视频宽
+	int										m_iSrcVideoHeight;//源视频高
+	int										m_iSrcVideoWidth;//源视频宽
+	int										m_iDstVideoHeight;//输出视频高
+	int										m_iDstVideoWidth;//输出视频宽
 	int										m_iPictureSize;	//一帧大小
 	uint8_t								   *m_pPictureBuf;	//数据内容
 	SDL_Thread							   *m_pPushThrid;	//推流线程

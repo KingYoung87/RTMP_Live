@@ -19,8 +19,6 @@ static  Uint32  audio_len;
 static  Uint8  *audio_pos;
 static int64_t audio_callback_time;
 
-string strResolution[5] = {"1920*1080", "1280*720", "720*576", "320*240"};
-
 static char *dup_wchar_to_utf8(wchar_t *w)
 {
 	char *s = NULL;
@@ -611,7 +609,7 @@ int video_thr(LPVOID lpParam)
 				goto END;
 			}
 
-			if (sws_scale(strct_streaminfo->m_pVideoSwsCtx, (const uint8_t* const*)pFrame->data, pFrame->linesize, 0, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height,
+			if (sws_scale(strct_streaminfo->m_pVideoSwsCtx, (const uint8_t* const*)pFrame->data, pFrame->linesize, 0, pThis->m_iSrcVideoHeight,
 				picture->data, picture->linesize) < 0){
 				TRACE("sws_scale < 0");
 				goto END;
@@ -1525,7 +1523,7 @@ int CLS_DlgStreamPusher::OpenCamera()
 
 
 	//打开摄像头
-	//m_pFmtVideoCtx = avformat_alloc_context();
+	m_pFmtVideoCtx = avformat_alloc_context();
 	if (avformat_open_input(&m_pFmtVideoCtx, psDevName, pVideoInputFmt, NULL) != 0){
 		TRACE("avformat_open_input err!\n");
 		return iRet;
@@ -1554,20 +1552,16 @@ int CLS_DlgStreamPusher::OpenCamera()
 		TRACE("NULL == m_pCodecVideoCtx");
 		return iRet;
 	}
-	m_pCodecVideoCtx->height = m_iVideoHeight;
-	m_pCodecVideoCtx->width = m_iVideoWidth;
 
 	//获取视频的宽与高
-	//m_iVideoHeight = m_pCodecVideoCtx->height;
-	//m_iVideoWidth = m_pCodecVideoCtx->width;
-	TRACE("video_thr--video_height[%d],video_width[%d]", m_iVideoHeight
-		, m_iVideoWidth);
+	m_iSrcVideoHeight = m_pCodecVideoCtx->height;
+	m_iSrcVideoWidth = m_pCodecVideoCtx->width;
 
 	m_pStreamInfo->m_pVideoFrame = av_frame_alloc();
 	m_pStreamInfo->m_pVideoFrameShowYUV = av_frame_alloc();
 	m_pStreamInfo->m_pVideoFramePushYUV = av_frame_alloc();
-	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iVideoWidth, m_iVideoHeight, m_pCodecVideoCtx->pix_fmt,
-		m_iVideoWidth, m_iVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
+	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iSrcVideoWidth, m_iSrcVideoHeight, m_pCodecVideoCtx->pix_fmt,
+		m_iDstVideoWidth, m_iDstVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
 	if (NULL == m_pStreamInfo->m_pVideoSwsCtx){
 		TRACE("NULL == strct_streaminfo->m_pVideoSwsCtx\n");
 		return iRet;
@@ -1685,8 +1679,8 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 		}
 		pVideoStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_H264);
 		pVideoStream->codec->codec_tag = 0;
-		pVideoStream->codec->height = m_iVideoHeight;// m_pCodecVideoCtx->height;//
-		pVideoStream->codec->width = m_iVideoWidth;// m_pCodecVideoCtx->width;//
+		pVideoStream->codec->height = m_iDstVideoHeight;
+		pVideoStream->codec->width = m_iDstVideoWidth;
 		pVideoStream->codec->time_base.den = ENCODE_FPS;
 		pVideoStream->codec->time_base.num = 1;
 		pVideoStream->codec->sample_aspect_ratio = m_pCodecVideoCtx->sample_aspect_ratio;
@@ -1808,7 +1802,7 @@ void CLS_DlgStreamPusher::OnCbnSelchangeCobResolution()
 	mapResolution = m_mapResolution[iSelResIndex];
 	map<int, int>::iterator iter = mapResolution.begin();
 	for (; iter != mapResolution.end(); iter++){
-		m_iVideoWidth = iter->first;
-		m_iVideoHeight = iter->second;
+		m_iDstVideoWidth = iter->first;
+		m_iDstVideoHeight = iter->second;
 	}
 }
