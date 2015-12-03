@@ -53,9 +53,7 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_pFmtAudioCtx = NULL;
 	m_pFmtRtmpCtx = NULL;
 	m_pCodecVideoCtx = NULL;
-	m_pPictureBuf = NULL;
 	m_pPushThrid = NULL;
-	m_iPictureSize = -1;
 	m_iVideoIndex = -1;
 	m_iVideoOutIndex = -1;
 	m_iAudioOutIndex = -1;
@@ -85,13 +83,13 @@ BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
 	ON_BN_CLICKED(IDC_BTN_PREVIEW, &CLS_DlgStreamPusher::OnBnClickedBtnPreview)
 	ON_BN_CLICKED(IDCANCEL, &CLS_DlgStreamPusher::OnBnClickedCancel)
 	ON_WM_CTLCOLOR()
-	ON_BN_CLICKED(IDC_BTN_DEVICE_AUDIO_TEST, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTest)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_AUDIO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTestStop)
 	ON_BN_CLICKED(IDC_BTN_DEVICE_VIDEO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop)
 	ON_BN_CLICKED(IDC_CHK_SHOW_VIDEO, &CLS_DlgStreamPusher::OnBnClickedChkShowVideo)
 	ON_BN_CLICKED(IDC_CHK_WRITE_FILE, &CLS_DlgStreamPusher::OnBnClickedChkWriteFile)
 	ON_CBN_SELCHANGE(IDC_COB_DEVICE_VIDEO, &CLS_DlgStreamPusher::OnCbnSelchangeCobDeviceVideo)
 	ON_CBN_SELCHANGE(IDC_COB_RESOLUTION, &CLS_DlgStreamPusher::OnCbnSelchangeCobResolution)
+	ON_BN_CLICKED(IDC_BTN_REFRESHVIDEO, &CLS_DlgStreamPusher::OnBnClickedBtnRefreshvideo)
 END_MESSAGE_MAP()
 
 
@@ -111,6 +109,9 @@ BOOL CLS_DlgStreamPusher::OnInitDialog()
 
 	//界面信息初始化
 	InitDlgItem();
+
+	//SDL初始化
+	InitSdl();
 
 	return TRUE;
 }
@@ -149,6 +150,26 @@ void CLS_DlgStreamPusher::OnPaint()
 HCURSOR CLS_DlgStreamPusher::OnQueryDragIcon()
 {
 	return static_cast<HCURSOR>(m_hIcon);
+}
+
+static int video_refresh_thread(void *opaque)
+{
+	struct_stream_info* pstrct_streaminfo = (struct_stream_info*)opaque;
+	if (NULL == pstrct_streaminfo){
+		TRACE("NULL == pstrct_streaminfo");
+		return -1;
+	}
+	while (!pstrct_streaminfo->m_iAbortRequest) {
+		SDL_Event event;
+		event.type = FF_VIDEO_REFRESH_EVENT;
+		SDL_PushEvent(&event);
+	}
+	SDL_Delay(40);
+	SDL_Event event;
+	event.type = FF_BREAK_EVENT;
+	SDL_PushEvent(&event);
+
+	return 0;
 }
 
 void CLS_DlgStreamPusher::OnBnClickedChkSrcType()
@@ -190,6 +211,9 @@ void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 		MessageBox("请选择进行推送的文件!");
 		return;
 	}
+
+	//开启视频刷新线程
+	m_pStreamInfo->m_pVideoRefreshThr = SDL_CreateThread(video_refresh_thread, NULL, m_pStreamInfo);
 	return;
 }
 
@@ -219,26 +243,6 @@ static int audio_refresh_thread(void *opaque)
 		//FIXME ideally we should wait the correct time but SDLs event passing is so slow it would be silly
 		av_usleep(pstrct_stream->m_pAudioStream && pstrct_stream->m_iShowMode != SHOW_MODE_VIDEO ? 20 * 1000 : 5000);
 	}
-	return 0;
-}
-
-static int video_refresh_thread(void *opaque)
-{
-	struct_stream_info* pstrct_streaminfo = (struct_stream_info*)opaque;
-	if (NULL == pstrct_streaminfo){
-		TRACE("NULL == pstrct_streaminfo");
-		return -1;
-	}
-	while (!pstrct_streaminfo->m_iAbortRequest) {
-		SDL_Event event;
-		event.type = FF_VIDEO_REFRESH_EVENT;
-		SDL_PushEvent(&event);
-	}
-	SDL_Delay(40);
-	SDL_Event event;
-	event.type = FF_BREAK_EVENT;
-	SDL_PushEvent(&event);
-
 	return 0;
 }
 
@@ -278,44 +282,16 @@ void CLS_DlgStreamPusher::InitDlgItem()
 		return;
 	}
 
-	//获取当前连接的视频设备
-	int iRet= GetDeviceInfo(n_Video);
-	if (iRet < 0){
-		TRACE("获取视频设备失败！");
-		return;
-	}
+	//获取设备信息
+	GetDevice();
 
-	//获取当前连接输入的音频设备
-	iRet = GetDeviceInfo(n_Audio);
-	if (iRet < 0){
-		TRACE("获取音频设备失败！");
-		return;
-	}
+	m_edtPusherAddr.SetWindowText("rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512");
 
-	//将获取到的设备信息插入下拉框中
-	std::map<int, std::vector<std::string>>::iterator iter = m_mapDeviceInfo.begin();
-	for (; iter != m_mapDeviceInfo.end(); iter ++){
-		if (n_Video == iter->first){
-			//视频设备
-			for (int i = 0; i < iter->second.size(); i ++){
-				int iCount = m_cboDeviceVideo.GetCount();
-				m_cboDeviceVideo.InsertString(iCount, iter->second[i].c_str());
-			}
-			m_cboDeviceVideo.SetCurSel(0);
-		}
-		else if (n_Audio == iter->first){
-			//音频设备
-			for (int i = 0; i < iter->second.size(); i ++){
-				int iCount = m_cboDeviceAudio.GetCount();
-				m_cboDeviceAudio.InsertString(iCount, iter->second[i].c_str());
-			}
-			m_cboDeviceAudio.SetCurSel(0);
-		}
-	}
+	return;
+}
 
-	//分辨率初始化
-	OnCbnSelchangeCobDeviceVideo();
-
+void CLS_DlgStreamPusher::InitSdl()
+{
 	//SDL初始化
 	int flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
 	int  sdlinit = SDL_Init(flags);
@@ -329,8 +305,7 @@ void CLS_DlgStreamPusher::InitDlgItem()
 
 	//将CSTATIC控件和sdl显示窗口关联 
 	HWND hWnd = this->GetDlgItem(IDC_STC_PREVIEW)->GetSafeHwnd();
-	if (hWnd != NULL)
-	{
+	if (hWnd != NULL){
 		if (m_pStreamInfo != NULL){
 			m_pStreamInfo->m_pShowScreen = SDL_CreateWindowFrom((void*)hWnd);
 			if (m_pStreamInfo->m_pShowScreen == NULL){
@@ -353,7 +328,7 @@ void CLS_DlgStreamPusher::InitDlgItem()
 				TRACE("SDL_CreateRenderer--sdlRenderer == NULL err(%d)\n", SDL_GetError());
 				return;
 			}
-		} 
+		}
 	}
 
 	//设置SDL事件状态
@@ -365,9 +340,14 @@ void CLS_DlgStreamPusher::InitDlgItem()
 		m_pThreadEvent = AfxBeginThread(Thread_Event, this);//开启线程
 	}
 
-	m_edtPusherAddr.SetWindowText("rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512");// ("rtmp://dlpub.live.hupucdn.com/prod/ca093f98f0696a56fc2d42bfd309b903");
+	//初始化纹理
+	m_blAudioShow = TRUE;
 
-	return;
+	//创建纹理
+	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
+
+	//开启audio测试线程
+	m_pStreamInfo->m_iShowMode = SHOW_MODE_VIDEO;
 }
 
 void CLS_DlgStreamPusher::UnInitInfo()
@@ -414,18 +394,6 @@ void CLS_DlgStreamPusher::UnInitInfo()
 			sws_freeContext(m_pStreamInfo->m_pVideoSwsCtx);
 			m_pStreamInfo->m_pVideoSwsCtx = NULL;
 		}
-		if (m_pStreamInfo->m_pVideoFrameShowYUV){
-			av_frame_free(&m_pStreamInfo->m_pVideoFrameShowYUV);
-			m_pStreamInfo->m_pVideoFrameShowYUV = NULL;
-		}
-		if (m_pStreamInfo->m_pVideoFramePushYUV){
-			av_frame_free(&m_pStreamInfo->m_pVideoFramePushYUV);
-			m_pStreamInfo->m_pVideoFramePushYUV = NULL;
-		}
-		if (m_pStreamInfo->m_pVideoFrame){
-			av_frame_free(&m_pStreamInfo->m_pVideoFrame);
-			m_pStreamInfo->m_pVideoFrame = NULL;
-		}
 		if (m_pStreamInfo->m_pAudioMutex){
 			SDL_DestroyMutex(m_pStreamInfo->m_pAudioMutex);
 			m_pStreamInfo->m_pAudioMutex = NULL;
@@ -440,11 +408,13 @@ void CLS_DlgStreamPusher::UnInitInfo()
 
 	if (NULL != m_pFmtVideoCtx){
 		avformat_close_input(&m_pFmtVideoCtx);
+		avformat_free_context(m_pFmtVideoCtx);
 		m_pFmtVideoCtx = NULL;
 	}
 
 	if (NULL != m_pFmtAudioCtx){
 		avformat_close_input(&m_pFmtAudioCtx);
+		avformat_free_context(m_pFmtAudioCtx);
 		m_pFmtAudioCtx = NULL;
 	}
 
@@ -454,11 +424,6 @@ void CLS_DlgStreamPusher::UnInitInfo()
 		}
 		avformat_free_context(m_pFmtRtmpCtx);
 		m_pFmtRtmpCtx = NULL;
-	}
-
-	if (NULL != m_pPictureBuf){
-		av_free(m_pPictureBuf);
-		m_pPictureBuf = NULL;
 	}
 
 	return;
@@ -784,17 +749,6 @@ END:
 	av_frame_free(&pFrame);
 	return iRet;
 }
-void CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTest()
-{
-	m_blAudioShow = TRUE;
-
-	//创建纹理
-	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
-
-	//开启audio测试线程
-	m_pStreamInfo->m_iShowMode = SHOW_MODE_WAVES;
-}
-
 void CLS_DlgStreamPusher::InitData()
 {
 	m_pStreamInfo = (struct_stream_info *)calloc(1, sizeof(struct_stream_info));
@@ -826,7 +780,6 @@ void CLS_DlgStreamPusher::InitData()
 	m_pStreamInfo->m_pVideoMutex = SDL_CreateMutex();
 	m_pStreamInfo->m_pVideoStream = NULL;
 	m_pStreamInfo->m_pAudioFrame = NULL;
-	m_pStreamInfo->m_pVideoFrame = NULL;
 	m_pStreamInfo->m_pAudioBuf = NULL;
 	m_pStreamInfo->m_iAudioBufSize = 0;
 	m_pStreamInfo->m_iAudioBufIndex = 0;
@@ -1502,12 +1455,6 @@ int CLS_DlgStreamPusher::OpenCamera()
 		return iRet;
 	}
 
-	//创建纹理
-	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
-
-	//设置SDL显示模式
-	m_pStreamInfo->m_iShowMode = SHOW_MODE_VIDEO;
-
 	//根据设备名称打开设备
 	char* psDevName = GetDeviceName(n_Video);
 	if (psDevName == NULL){
@@ -1557,17 +1504,12 @@ int CLS_DlgStreamPusher::OpenCamera()
 	m_iSrcVideoHeight = m_pCodecVideoCtx->height;
 	m_iSrcVideoWidth = m_pCodecVideoCtx->width;
 
-	m_pStreamInfo->m_pVideoFrame = av_frame_alloc();
-	m_pStreamInfo->m_pVideoFrameShowYUV = av_frame_alloc();
-	m_pStreamInfo->m_pVideoFramePushYUV = av_frame_alloc();
 	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iSrcVideoWidth, m_iSrcVideoHeight, m_pCodecVideoCtx->pix_fmt,
 		m_iDstVideoWidth, m_iDstVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
 	if (NULL == m_pStreamInfo->m_pVideoSwsCtx){
 		TRACE("NULL == strct_streaminfo->m_pVideoSwsCtx\n");
 		return iRet;
 	}
-
-	m_pStreamInfo->m_pVideoRefreshThr = SDL_CreateThread(video_refresh_thread, NULL, m_pStreamInfo);
 
 	//需要将采集信息写文件，打开解码器
 	pCodec = avcodec_find_decoder(m_pCodecVideoCtx->codec_id);
@@ -1706,12 +1648,6 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 			return iRet;
 		}
 
-		//推流帧
-		m_iPictureSize = avpicture_get_size(pVideoStream->codec->pix_fmt, pVideoStream->codec->width, pVideoStream->codec->height);
-		m_pPictureBuf = (uint8_t *)av_malloc(m_iPictureSize);
-		avpicture_fill((AVPicture *)m_pStreamInfo->m_pVideoFrameShowYUV, m_pPictureBuf, pVideoStream->codec->pix_fmt, pVideoStream->codec->width, pVideoStream->codec->height);
-		avpicture_fill((AVPicture *)m_pStreamInfo->m_pVideoFramePushYUV, m_pPictureBuf, pVideoStream->codec->pix_fmt, pVideoStream->codec->width, pVideoStream->codec->height);
-
 		m_pStreamInfo->m_pVideoFifo = av_fifo_alloc( 30 * avpicture_get_size(AV_PIX_FMT_YUV420P, pVideoStream->codec->width, pVideoStream->codec->height));
 	}
 
@@ -1805,4 +1741,55 @@ void CLS_DlgStreamPusher::OnCbnSelchangeCobResolution()
 		m_iDstVideoWidth = iter->first;
 		m_iDstVideoHeight = iter->second;
 	}
+}
+
+
+void CLS_DlgStreamPusher::OnBnClickedBtnRefreshvideo()
+{
+	//设备刷新获取
+	GetDevice();
+}
+
+void CLS_DlgStreamPusher::GetDevice()
+{
+	m_mapDeviceInfo.clear();
+	m_cboDeviceVideo.ResetContent();
+	m_cboDeviceAudio.ResetContent();
+	//获取当前连接的视频设备
+	int iRet = GetDeviceInfo(n_Video);
+	if (iRet < 0){
+		TRACE("获取视频设备失败！");
+		return;
+	}
+
+	//获取当前连接输入的音频设备
+	iRet = GetDeviceInfo(n_Audio);
+	if (iRet < 0){
+		TRACE("获取音频设备失败！");
+		return;
+	}
+
+	//将获取到的设备信息插入下拉框中
+	std::map<int, std::vector<std::string>>::iterator iter = m_mapDeviceInfo.begin();
+	for (; iter != m_mapDeviceInfo.end(); iter++){
+		if (n_Video == iter->first){
+			//视频设备
+			for (int i = 0; i < iter->second.size(); i++){
+				int iCount = m_cboDeviceVideo.GetCount();
+				m_cboDeviceVideo.InsertString(iCount, iter->second[i].c_str());
+			}
+			m_cboDeviceVideo.SetCurSel(0);
+		}
+		else if (n_Audio == iter->first){
+			//音频设备
+			for (int i = 0; i < iter->second.size(); i++){
+				int iCount = m_cboDeviceAudio.GetCount();
+				m_cboDeviceAudio.InsertString(iCount, iter->second[i].c_str());
+			}
+			m_cboDeviceAudio.SetCurSel(0);
+		}
+	}
+
+	//分辨率初始化
+	OnCbnSelchangeCobDeviceVideo();
 }

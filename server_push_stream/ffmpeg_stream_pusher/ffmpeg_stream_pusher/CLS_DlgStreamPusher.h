@@ -114,9 +114,6 @@ typedef struct stream_info{
 	AVFifoBuffer			*m_pVideoFifo;
 	SDL_mutex			*m_pVideoMutex;
 	AVStream				*m_pVideoStream;			//视频流
-	AVFrame				*m_pVideoFrame;			//视频帧
-	AVFrame				*m_pVideoFrameShowYUV;	//视频帧的显示YUV
-	AVFrame				*m_pVideoFramePushYUV;	//视频帧的推送YUV
 	AVPacket				*m_pVideoPacket;			//视频包
 	uint8_t				*m_pVideoOutBuffer;		//视频输出缓存
 	SwsContext			*m_pVideoSwsCtx;
@@ -156,12 +153,12 @@ public:
 	afx_msg void OnBnClickedBtnPreview();
 	afx_msg void OnBnClickedCancel();
 	afx_msg void OnBnClickedChkShowVideo();
-	afx_msg void OnBnClickedBtnDeviceAudioTest();
 	afx_msg void OnBnClickedBtnDeviceAudioTestStop();
 	afx_msg void OnBnClickedBtnDeviceVideoTestStop();
 	afx_msg void OnBnClickedChkWriteFile();
 	afx_msg void OnCbnSelchangeCobDeviceVideo();
 	afx_msg void OnCbnSelchangeCobResolution();
+	afx_msg void OnBnClickedBtnRefreshvideo();
 
 	afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
 
@@ -191,10 +188,22 @@ private:
 	void InitData();
 
 	/**********************
+	method: SDL初始化
+	return: void
+	**********************/
+	void InitSdl();
+
+	/**********************
 	method: 界面信息反初始化
 	return: void
 	**********************/
 	void UnInitInfo();
+	
+	/**********************
+	method: 获取设备信息
+	return: void
+	**********************/
+	void GetDevice();
 
 	/**********************
 	method: 获取连接的视频与音频设备
@@ -349,8 +358,6 @@ public:
 	int										m_iSrcVideoWidth;//源视频宽
 	int										m_iDstVideoHeight;//输出视频高
 	int										m_iDstVideoWidth;//输出视频宽
-	int										m_iPictureSize;	//一帧大小
-	uint8_t								   *m_pPictureBuf;	//数据内容
 	SDL_Thread							   *m_pPushThrid;	//推流线程
 	map<int, map<int, int>>					m_mapResolution;	//分辨率容器
 };
