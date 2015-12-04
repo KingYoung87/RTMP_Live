@@ -114,8 +114,8 @@ typedef struct stream_info{
 	AVFifoBuffer			*m_pVideoFifo;
 	SDL_mutex			*m_pVideoMutex;
 	AVStream				*m_pVideoStream;			//视频流
-	AVPacket				*m_pVideoPacket;			//视频包
-	uint8_t				*m_pVideoOutBuffer;		//视频输出缓存
+	uint8_t				*m_pVideoDecPicSize;		//视频解码Pic大小
+	uint8_t				*m_pPushPicSize;			//推送Pic大小
 	SwsContext			*m_pVideoSwsCtx;
 	
 	/************************视频相关参数-end***********************/
