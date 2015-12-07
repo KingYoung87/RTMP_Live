@@ -12,14 +12,10 @@
 #define new DEBUG_NEW
 #endif
 
-#define ENCODE_FPS 25//30.000030
-
 static  Uint8  *audio_chunk;
 static  Uint32  audio_len;
 static  Uint8  *audio_pos;
 static int64_t audio_callback_time;
-
-static uint8_t *g_uiTest;
 
 static char *dup_wchar_to_utf8(wchar_t *w)
 {
@@ -59,6 +55,7 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_iVideoIndex = -1;
 	m_iVideoOutIndex = -1;
 	m_iAudioOutIndex = -1;
+	m_iFrameRate = -1;
 }
 
 void CLS_DlgStreamPusher::DoDataExchange(CDataExchange* pDX)
@@ -74,6 +71,7 @@ void CLS_DlgStreamPusher::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_CHK_SHOW_VIDEO, m_chkShowVideo);
 	DDX_Control(pDX, IDC_COB_RESOLUTION, m_cboResolution);
 	DDX_Control(pDX, IDC_CHK_WRITE_FILE, m_chkWriteFile);
+	DDX_Control(pDX, IDC_EDT_FRAMERATE, m_edtFrameRate);
 }
 
 BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
@@ -85,8 +83,6 @@ BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
 	ON_BN_CLICKED(IDC_BTN_PREVIEW, &CLS_DlgStreamPusher::OnBnClickedBtnPreview)
 	ON_BN_CLICKED(IDCANCEL, &CLS_DlgStreamPusher::OnBnClickedCancel)
 	ON_WM_CTLCOLOR()
-	ON_BN_CLICKED(IDC_BTN_DEVICE_AUDIO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTestStop)
-	ON_BN_CLICKED(IDC_BTN_DEVICE_VIDEO_TEST_STOP, &CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop)
 	ON_BN_CLICKED(IDC_CHK_SHOW_VIDEO, &CLS_DlgStreamPusher::OnBnClickedChkShowVideo)
 	ON_BN_CLICKED(IDC_CHK_WRITE_FILE, &CLS_DlgStreamPusher::OnBnClickedChkWriteFile)
 	ON_CBN_SELCHANGE(IDC_COB_DEVICE_VIDEO, &CLS_DlgStreamPusher::OnCbnSelchangeCobDeviceVideo)
@@ -288,7 +284,8 @@ void CLS_DlgStreamPusher::InitDlgItem()
 	//获取设备信息
 	GetDevice();
 
-	m_edtPusherAddr.SetWindowText("rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512");
+	m_edtPusherAddr.SetWindowText("rtmp://dlpub.live.hupucdn.com/prod/ca093f98f0696a56fc2d42bfd309b903");//rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512
+	m_edtFrameRate.SetWindowText("25");
 
 	return;
 }
@@ -1078,38 +1075,6 @@ void CLS_DlgStreamPusher::FillRec(SDL_Surface *screen,
 	SDL_FillRect(screen, &rect, color);
 }
 
-void CLS_DlgStreamPusher::OnBnClickedBtnDeviceAudioTestStop()
-{
-	//停止音频测试
-	if (!m_blAudioShow){
-		TRACE("!m_blAudioShow");
-		return;
-	}
-	if (NULL == m_pStreamInfo){
-		TRACE("NULL == m_pStreamInfo");
-		return;
-	}
-	m_blAudioShow = FALSE;
-	StopTest();
-	SDL_CloseAudio();
-
-	m_pStreamInfo->m_pAudioThr = NULL;
-}
-
-void CLS_DlgStreamPusher::OnBnClickedBtnDeviceVideoTestStop()
-{
-	//停止视频测试
-	if (!m_blVideoShow){
-		TRACE("!m_blVideoShow");
-		return;
-	}
-	if (NULL == m_pStreamInfo){
-		TRACE("NULL == m_pStreamInfo");
-		return;
-	}
-	m_blVideoShow = FALSE;
-}
-
 void CLS_DlgStreamPusher::StopTest()
 {
 	SDL_Event event;
@@ -1321,7 +1286,7 @@ int push_thr(LPVOID lpParam)
 					pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
 
 				//pts = n * (（1 / timbase）/ fps);
-				picture->pts = frame_video_index * ((pThis->m_pFmtVideoCtx->streams[0]->time_base.den / pThis->m_pFmtVideoCtx->streams[0]->time_base.num) / ENCODE_FPS);
+				picture->pts = frame_video_index * ((pThis->m_pFmtVideoCtx->streams[0]->time_base.den / pThis->m_pFmtVideoCtx->streams[0]->time_base.num) / pThis->m_iFrameRate);
 
 				int got_picture = 0;
 				av_init_packet(&pkt);
@@ -1428,6 +1393,16 @@ void CLS_DlgStreamPusher::OnBnClickedOk()
 		MessageBox(_T("请输入正确的推流地址！\n"));
 		return;
 	}
+
+	CString cstrFrameRate = "";
+	m_edtFrameRate.GetWindowText(cstrFrameRate);
+	if (strcmp(cstrFrameRate, "") == 0){
+		MessageBox(_T("请输入正确的帧率！\n"));
+		return;
+	}
+
+	m_iFrameRate = StrToInt(cstrFrameRate);
+	
 	if (OpenCamera() < 0){
 		TRACE("OpenCamera failed!/n");
 		goto END;
@@ -1527,7 +1502,7 @@ int CLS_DlgStreamPusher::OpenCamera()
 		TRACE("m_iVideoIndex < 0\n");
 		return iRet;
 	}
-	m_pFmtVideoCtx->streams[m_iVideoIndex]->time_base.den = ENCODE_FPS;
+	m_pFmtVideoCtx->streams[m_iVideoIndex]->time_base.den = m_iFrameRate;
 	m_pFmtVideoCtx->streams[m_iVideoIndex]->time_base.num = 1;
 
 	m_pCodecVideoCtx = m_pFmtVideoCtx->streams[m_iVideoIndex]->codec;
@@ -1657,7 +1632,7 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 		m_pStreamInfo->m_pVideoStream->codec->codec_tag = 0;
 		m_pStreamInfo->m_pVideoStream->codec->height = m_iDstVideoHeight;
 		m_pStreamInfo->m_pVideoStream->codec->width = m_iDstVideoWidth;
-		m_pStreamInfo->m_pVideoStream->codec->time_base.den = ENCODE_FPS;
+		m_pStreamInfo->m_pVideoStream->codec->time_base.den = m_iFrameRate;
 		m_pStreamInfo->m_pVideoStream->codec->time_base.num = 1;
 		m_pStreamInfo->m_pVideoStream->codec->sample_aspect_ratio = m_pCodecVideoCtx->sample_aspect_ratio;
 		m_pStreamInfo->m_pVideoStream->codec->pix_fmt = AV_PIX_FMT_YUV420P;

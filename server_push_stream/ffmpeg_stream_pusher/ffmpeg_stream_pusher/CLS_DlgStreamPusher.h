@@ -153,8 +153,6 @@ public:
 	afx_msg void OnBnClickedBtnPreview();
 	afx_msg void OnBnClickedCancel();
 	afx_msg void OnBnClickedChkShowVideo();
-	afx_msg void OnBnClickedBtnDeviceAudioTestStop();
-	afx_msg void OnBnClickedBtnDeviceVideoTestStop();
 	afx_msg void OnBnClickedChkWriteFile();
 	afx_msg void OnCbnSelchangeCobDeviceVideo();
 	afx_msg void OnCbnSelchangeCobResolution();
@@ -165,6 +163,7 @@ public:
 	//控件定义
 	CEdit	m_edtLocalFilePath;
 	CEdit	m_edtPusherAddr;
+	CEdit	m_edtFrameRate;
 	CButton m_chkSrcType;
 	CButton m_chkShowVideo;
 	CButton m_chkWriteFile;
@@ -358,6 +357,7 @@ public:
 	int										m_iSrcVideoWidth;//源视频宽
 	int										m_iDstVideoHeight;//输出视频高
 	int										m_iDstVideoWidth;//输出视频宽
+	int										m_iFrameRate;	//帧率
 	SDL_Thread							   *m_pPushThrid;	//推流线程
 	map<int, map<int, int>>					m_mapResolution;	//分辨率容器
 };
