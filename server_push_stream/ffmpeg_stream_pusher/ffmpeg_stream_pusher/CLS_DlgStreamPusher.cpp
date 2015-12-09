@@ -45,7 +45,6 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_mapDeviceInfo.clear();
 	m_blVideoShow = FALSE;
 	m_blAudioShow = FALSE;
-	m_blPushStream = FALSE;
 	m_cstrPushAddr = "";
 	m_pFmtVideoCtx = NULL;
 	m_pFmtAudioCtx = NULL;
@@ -56,6 +55,9 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_iVideoOutIndex = -1;
 	m_iAudioOutIndex = -1;
 	m_iFrameRate = -1;
+	m_blCreateVideoWin = FALSE;
+	m_blPushStream = FALSE;
+	m_blPreview = FALSE;
 }
 
 void CLS_DlgStreamPusher::DoDataExchange(CDataExchange* pDX)
@@ -90,6 +92,201 @@ BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
 	ON_BN_CLICKED(IDC_BTN_REFRESHVIDEO, &CLS_DlgStreamPusher::OnBnClickedBtnRefreshvideo)
 END_MESSAGE_MAP()
 
+
+int video_thr(LPVOID lpParam)
+{
+	int iRet = -1;
+	struct_stream_info	*	strct_streaminfo = NULL;
+	int						iVideoPic = 0;
+	int64_t					start_time = 0;
+	AVPacket		pkt;
+
+	CLS_DlgStreamPusher* pThis = (CLS_DlgStreamPusher*)lpParam;
+	if (pThis == NULL){
+		TRACE("video_thr--pThis == NULL\n");
+		return iRet;
+	}
+	if (NULL == pThis->m_pFmtVideoCtx || NULL == pThis->m_pCodecVideoCtx){
+		TRACE("NULL == pThis->m_pFmtVideoCtx || NULL == pThis->m_pCodecVideoCtx\n");
+		return iRet;
+	}
+
+	strct_streaminfo = pThis->m_pStreamInfo;
+	if (NULL == strct_streaminfo){
+		TRACE("NULL == strct_streaminfo\n");
+		return iRet;
+	}
+
+	//显示视频的区域
+	SDL_Rect sdlRect;
+	sdlRect.x = 0;
+	sdlRect.y = 0;
+	sdlRect.w = strct_streaminfo->m_width;
+	sdlRect.h = strct_streaminfo->m_height;
+
+	TRACE("Rect width is[%d] and height is[%d]\n", sdlRect.w, sdlRect.h);
+
+	AVFrame	* pFrame;
+	pFrame = avcodec_alloc_frame();
+	AVFrame *picture = avcodec_alloc_frame();
+	int size = avpicture_get_size(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
+		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
+	strct_streaminfo->m_pVideoDecPicSize = (uint8_t*)av_malloc(size);
+
+	avpicture_fill((AVPicture *)picture, strct_streaminfo->m_pVideoDecPicSize,
+		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
+		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width,
+		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
+
+	int height = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height;
+	int width = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width;
+	int y_size = height*width;
+
+	SDL_Rect sdlSrcRect;
+	sdlSrcRect.x = 0;
+	sdlSrcRect.y = 0;
+	sdlSrcRect.w = height;
+	sdlSrcRect.h = width;
+
+	//从摄像头获取数据
+	while (1){
+		if (strct_streaminfo->m_iAbortRequest){
+			break;
+		}
+		pkt.data = NULL;
+		pkt.size = 0;
+		if (av_read_frame(pThis->m_pFmtVideoCtx, &pkt) >= 0){
+			//解码显示
+			if (pkt.stream_index != 0){
+				av_free_packet(&pkt);
+				continue;
+			}
+			iRet = avcodec_decode_video2(pThis->m_pCodecVideoCtx, pFrame, &iVideoPic, &pkt);
+			if (iRet < 0){
+				TRACE("Decode Error.\n");
+				goto END;
+			}
+			av_free_packet(&pkt);
+			if (iVideoPic <= 0){
+				TRACE("iVideoPic <= 0");
+				goto END;
+			}
+
+			if (sws_scale(strct_streaminfo->m_pVideoSwsCtx, (const uint8_t* const*)pFrame->data, pFrame->linesize, 0, pThis->m_iSrcVideoHeight,
+				picture->data, picture->linesize) < 0){
+				TRACE("sws_scale < 0");
+				goto END;
+			}
+
+			if (pThis->m_blVideoShow){
+				//显示视频
+				SDL_UpdateYUVTexture(strct_streaminfo->m_pSdlTexture, NULL, picture->data[0], picture->linesize[0], picture->data[1], picture->linesize[1], picture->data[2], picture->linesize[2]);
+				SDL_RenderClear(strct_streaminfo->m_pSdlRender);
+				SDL_RenderCopy(strct_streaminfo->m_pSdlRender, strct_streaminfo->m_pSdlTexture, NULL, NULL);
+				SDL_RenderPresent(strct_streaminfo->m_pSdlRender);
+			}
+
+			int iVideoFifoSize = av_fifo_space(strct_streaminfo->m_pVideoFifo);
+			if (iVideoFifoSize >= size){
+				SDL_mutexP(strct_streaminfo->m_pVideoMutex);
+				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[0], y_size, NULL);
+				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[1], y_size / 4, NULL);
+				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[2], y_size / 4, NULL);
+				SDL_mutexV(strct_streaminfo->m_pVideoMutex);
+			}
+		}
+	}
+
+	iRet = 1;
+END:
+	av_frame_free(&pFrame);
+	av_frame_free(&picture);
+
+	return iRet;
+}
+
+int audio_thr(LPVOID lpParam)
+{
+	//采集音频，进行储存
+	int iRet = -1;
+	AVPacket		pkt;
+	AVFrame*		pFrame = NULL;
+
+	CLS_DlgStreamPusher* pThis = (CLS_DlgStreamPusher*)lpParam;
+	if (pThis == NULL){
+		TRACE("audio_thr--pThis == NULL\n");
+		return iRet;
+	}
+	if (NULL == pThis->m_pFmtAudioCtx){
+		TRACE("NULL == pThis->m_pFmtAudioCtx\n");
+		return iRet;
+	}
+	AVCodecContext* pCodec = pThis->m_pFmtAudioCtx->streams[0]->codec;
+	if (NULL == pCodec){
+		TRACE("NULL == pCodec");
+		return iRet;
+	}
+
+	struct_stream_info* pStrctStreamInfo = pThis->m_pStreamInfo;
+	if (NULL == pStrctStreamInfo){
+		TRACE("NULL == pStrctStreamInfo\n");
+		return iRet;
+	}
+
+	while (1){
+		if (pStrctStreamInfo->m_iAbortRequest){
+			break;
+		}
+		pkt.data = NULL;
+		pkt.size = 0;
+		if (av_read_frame(pThis->m_pFmtAudioCtx, &pkt) < 0 || _kbhit() != 0){
+			continue;
+		}
+
+		if (!pFrame) {
+			if (!(pFrame = avcodec_alloc_frame())){
+				TRACE("!(strct_stream_info->m_pAudioFrame = avcodec_alloc_frame())\n");
+				goto END;
+			}
+		}
+		else{
+			avcodec_get_frame_defaults(pFrame);
+		}
+
+		int gotframe = -1;
+		if (avcodec_decode_audio4(pThis->m_pFmtAudioCtx->streams[0]->codec, pFrame, &gotframe, &pkt) < 0){
+			TRACE("can not decoder a frame\n");
+			break;
+		}
+		av_free_packet(&pkt);
+
+		if (!gotframe){
+			//没有获取到数据，继续下一次
+			TRACE("avcodec_decode_audio4 gotframe is 0!\n");
+			continue;
+		}
+
+		SDL_mutexP(pStrctStreamInfo->m_pAudioMutex);
+		if (NULL == pStrctStreamInfo->m_pAudioFifo){
+			pStrctStreamInfo->m_pAudioFifo = av_audio_fifo_alloc(pThis->m_pFmtAudioCtx->streams[0]->codec->sample_fmt,
+				pThis->m_pFmtAudioCtx->streams[0]->codec->channels, 30 * pFrame->nb_samples);
+		}
+
+		int buf_space = av_audio_fifo_space(pStrctStreamInfo->m_pAudioFifo);
+		if (buf_space >= pFrame->nb_samples){
+			av_audio_fifo_write(pStrctStreamInfo->m_pAudioFifo, (void **)pFrame->data, pFrame->nb_samples);
+		}
+		else if (buf_space > 0){
+			av_audio_fifo_write(pStrctStreamInfo->m_pAudioFifo, (void **)pFrame->data, buf_space);
+		}
+		SDL_mutexV(pStrctStreamInfo->m_pAudioMutex);
+	}
+	iRet = 1;
+
+END:
+	av_frame_free(&pFrame);
+	return iRet;
+}
 
 // CLS_DlgStreamPusher 消息处理程序
 
@@ -204,14 +401,67 @@ void CLS_DlgStreamPusher::OnBnClickedBtnOpenLocalFile()
 
 void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 {
-	//源视频流预览
-	if (m_cstrFilePath == ""){
-		MessageBox("请选择进行推送的文件!");
+	if (m_blPreview){
+		TRACE("Preview started!\n");
 		return;
 	}
 
-	//开启视频刷新线程
-	m_pStreamInfo->m_pVideoRefreshThr = SDL_CreateThread(video_refresh_thread, NULL, m_pStreamInfo);
+	//进行推流操作
+	m_edtPusherAddr.GetWindowText(m_cstrPushAddr);
+	if (m_cstrPushAddr == ""){
+		MessageBox(_T("请输入正确的推流地址！\n"));
+		return;
+	}
+
+	CString cstrFrameRate = "";
+	m_edtFrameRate.GetWindowText(cstrFrameRate);
+	if (strcmp(cstrFrameRate, "") == 0){
+		MessageBox(_T("请输入正确的帧率！\n"));
+		return;
+	}
+
+	m_iFrameRate = StrToInt(cstrFrameRate);
+
+	if (CreateVideoWindow() < 0){
+		TRACE("创建视频窗口失败！\n");
+		goto END;
+	}
+
+	if (OpenCamera() < 0){
+		TRACE("OpenCamera failed!/n");
+		goto END;
+	}
+
+	if (OpenAduio() < 0){
+		TRACE("OpenAduio failed!/n");
+		goto END;
+	}
+
+	if (OpenRtmpUrl() < 0){
+		TRACE("OpenRtmpUrl failed!/n");
+		goto END;
+	}
+
+	//开启视频采集线程
+	if (m_pStreamInfo->m_pVideoThr == NULL){
+		m_pStreamInfo->m_pVideoThr = SDL_CreateThread(video_thr, NULL, (void*)this);
+		if (m_pStreamInfo->m_pVideoThr == NULL){
+			TRACE("创建视频测试线程失败！\n");
+			goto END;
+		}
+	}
+
+	if (m_pStreamInfo->m_pAudioThr == NULL){
+		m_pStreamInfo->m_pAudioThr = SDL_CreateThread(audio_thr, NULL, (void*)this);
+		if (m_pStreamInfo->m_pAudioThr == NULL){
+			TRACE("创建音频测试线程失败！\n");
+			goto END;
+		}
+	}
+
+	m_blPushStream = TRUE;
+	m_blPreview = TRUE;
+END:
 	return;
 }
 
@@ -241,14 +491,6 @@ static int audio_refresh_thread(void *opaque)
 		}
 		//FIXME ideally we should wait the correct time but SDLs event passing is so slow it would be silly
 		av_usleep(pstrct_stream->m_pAudioStream && pstrct_stream->m_iShowMode != SHOW_MODE_VIDEO ? 20 * 1000 : 5000);
-	}
-	return 0;
-}
-
-UINT Thread_Event(LPVOID lpParam){
-	CLS_DlgStreamPusher *dlg = (CLS_DlgStreamPusher *)lpParam;
-	if (dlg != NULL){
-		dlg->EventLoop(dlg->m_pStreamInfo);
 	}
 	return 0;
 }
@@ -284,7 +526,7 @@ void CLS_DlgStreamPusher::InitDlgItem()
 	//获取设备信息
 	GetDevice();
 
-	m_edtPusherAddr.SetWindowText("rtmp://dlpub.live.hupucdn.com/prod/ca093f98f0696a56fc2d42bfd309b903");//rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512
+	m_edtPusherAddr.SetWindowText("rtmp://dqd-dl-pub.arenacdn.com/prod/fz03hK0M8lFhEADp?pass=5c1bda46fb43ff291e06cf9e9788b1bc");//rtmp://xxg2c3.publish.z1.pili.qiniup.com/dongqiudi/live3?key=bc21bda2fe27c512
 	m_edtFrameRate.SetWindowText("25");
 
 	return;
@@ -303,67 +545,24 @@ void CLS_DlgStreamPusher::InitSdl()
 		return;
 	}
 
-	//将CSTATIC控件和sdl显示窗口关联 
-	HWND hWnd = this->GetDlgItem(IDC_STC_PREVIEW)->GetSafeHwnd();
-	if (hWnd != NULL){
-		if (m_pStreamInfo != NULL){
-			m_pStreamInfo->m_pShowScreen = SDL_CreateWindowFrom((void*)hWnd);
-			if (m_pStreamInfo->m_pShowScreen == NULL){
-				TRACE("SDL_CreateWindowFrom ERR(%d)\n", SDL_GetError());
-				return;
-			}
-
-			RECT rectDisPlay;
-			this->GetDlgItem(IDC_STC_PREVIEW)->GetWindowRect(&rectDisPlay);
-			m_pStreamInfo->m_xLeft = rectDisPlay.left;
-			m_pStreamInfo->m_yTop = rectDisPlay.top;
-			m_pStreamInfo->m_width = rectDisPlay.right - rectDisPlay.left;
-			m_pStreamInfo->m_height = rectDisPlay.bottom - rectDisPlay.top;
-
-			//处理显示区域
-			FillDisplayRect();
-
-			m_pStreamInfo->m_pSdlRender = SDL_CreateRenderer(m_pStreamInfo->m_pShowScreen, -1, 0);
-			if (m_pStreamInfo->m_pSdlRender == NULL){
-				TRACE("SDL_CreateRenderer--sdlRenderer == NULL err(%d)\n", SDL_GetError());
-				return;
-			}
-		}
-	}
-
 	//设置SDL事件状态
 	SDL_EventState(SDL_WINDOWEVENT, SDL_IGNORE);
 	SDL_EventState(SDL_SYSWMEVENT, SDL_IGNORE);
 	SDL_EventState(SDL_USEREVENT, SDL_IGNORE);
 
-	if (m_pThreadEvent == NULL){
-		m_pThreadEvent = AfxBeginThread(Thread_Event, this);//开启线程
-	}
-
 	//初始化纹理
 	m_blAudioShow = TRUE;
+	m_blVideoShow = TRUE;
 
-	//创建纹理
-	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, m_pStreamInfo->m_width, m_pStreamInfo->m_height);
-
-	//开启audio测试线程
+	//设置sdl显示模式
 	m_pStreamInfo->m_iShowMode = SHOW_MODE_VIDEO;
 }
 
 void CLS_DlgStreamPusher::UnInitInfo()
 {
 	//释放相关资源
-	if (m_cstrFilePath != ""){
-		m_cstrFilePath.ReleaseBuffer();
-		m_cstrFilePath = "";
-	}
-	if (NULL != m_bkBrush)
-	{
-		DeleteObject(m_bkBrush);
-		m_bkBrush = NULL;
-	}
-
-	m_mapDeviceInfo.clear();
+	m_blPushStream = FALSE;
+	m_blPreview = FALSE;
 
 	if (NULL != m_pStreamInfo){
 		m_pStreamInfo->m_iAbortRequest = 1;
@@ -434,17 +633,8 @@ void CLS_DlgStreamPusher::UnInitInfo()
 				m_pStreamInfo->m_pAudioStream->codec = NULL;
 			}
 		}
-
 		m_pStreamInfo->m_iAbortRequest = 0;
 	}
-
-	//if (NULL != m_pFmtRtmpCtx){
-	//	if (!(m_pFmtRtmpCtx->flags & AVFMT_NOFILE)){
-	//		avio_close(m_pFmtRtmpCtx->pb);
-	//	}
-	//	avformat_free_context(m_pFmtRtmpCtx);
-	//	m_pFmtRtmpCtx = NULL;
-	//}
 
 	if (NULL != m_pCodecVideoCtx){
 		avcodec_close(m_pCodecVideoCtx);
@@ -549,95 +739,6 @@ int CLS_DlgStreamPusher::GetDeviceInfo(int _iDeviceType)
 	return iRet;
 }
 
-int video_thr(LPVOID lpParam)
-{
-	int iRet = -1;
-	struct_stream_info	*	strct_streaminfo	= NULL;
-	int						iVideoPic			= 0;
-	int64_t					start_time			= 0;
-	AVPacket		pkt;
-
-	CLS_DlgStreamPusher* pThis = (CLS_DlgStreamPusher*)lpParam;
-	if (pThis == NULL){
-		TRACE("video_thr--pThis == NULL\n");
-		return iRet;
-	}
-	if (NULL == pThis->m_pFmtVideoCtx || NULL == pThis->m_pCodecVideoCtx){
-		TRACE("NULL == pThis->m_pFmtVideoCtx || NULL == pThis->m_pCodecVideoCtx\n");
-		return iRet;
-	}
-
-	strct_streaminfo = pThis->m_pStreamInfo;
-	if(NULL == strct_streaminfo){
-		TRACE("NULL == strct_streaminfo\n");
-		return iRet;
-	}
-
-	AVFrame	* pFrame;
-	pFrame = avcodec_alloc_frame();
-	AVFrame *picture = avcodec_alloc_frame();
-	int size = avpicture_get_size(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
-	strct_streaminfo->m_pVideoDecPicSize = (uint8_t*)av_malloc(size);
-
-	avpicture_fill((AVPicture *)picture, strct_streaminfo->m_pVideoDecPicSize,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
-
-	int height = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height;
-	int width = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width;
-	int y_size = height*width;
-
-	//从摄像头获取数据
-	while(1){
-		if (strct_streaminfo->m_iAbortRequest){
-			break;
-		}
-		pkt.data = NULL;
-		pkt.size = 0;
-		if (av_read_frame(pThis->m_pFmtVideoCtx, &pkt) >= 0){
-			//解码显示
-			if (pkt.stream_index != 0){
-				av_free_packet(&pkt);
-				continue;
-			}
-			iRet = avcodec_decode_video2(pThis->m_pCodecVideoCtx, pFrame, &iVideoPic, &pkt);
-			if (iRet < 0){
-				TRACE("Decode Error.\n");
-				goto END;
-			}
-			av_free_packet(&pkt);
-			if (iVideoPic <= 0){
-				TRACE("iVideoPic <= 0");
-				goto END;
-			}
-
-			if (sws_scale(strct_streaminfo->m_pVideoSwsCtx, (const uint8_t* const*)pFrame->data, pFrame->linesize, 0, pThis->m_iSrcVideoHeight,
-				picture->data, picture->linesize) < 0){
-				TRACE("sws_scale < 0");
-				goto END;
-			}
-
-			int iVideoFifoSize = av_fifo_space(strct_streaminfo->m_pVideoFifo);
-			if (iVideoFifoSize >= size){
-				SDL_mutexP(strct_streaminfo->m_pVideoMutex);
-				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[0], y_size, NULL);
-				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[1], y_size / 4, NULL);
-				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[2], y_size / 4, NULL);
-				SDL_mutexV(strct_streaminfo->m_pVideoMutex);
-			}
-		}
-	}
-
-	iRet = 1;
-END:
-	av_frame_free(&pFrame);
-	av_frame_free(&picture);
-
-	return iRet;
-}
-
 void UpdateSampleDisplay(struct_stream_info *_pstrct_streaminfo, short *samples, int samples_size)//CLS_DlgStreamPusher::
 {
 	int size, len;
@@ -647,7 +748,7 @@ void UpdateSampleDisplay(struct_stream_info *_pstrct_streaminfo, short *samples,
 		len = SAMPLE_ARRAY_SIZE - _pstrct_streaminfo->m_iSampleArrayIndex;
 		if (len > size)
 			len = size;
-		memcpy(_pstrct_streaminfo->m_iSampleArray + _pstrct_streaminfo->m_iSampleArrayIndex, samples, len * sizeof(short));
+		//memcpy(_pstrct_streaminfo->m_iSampleArray + _pstrct_streaminfo->m_iSampleArrayIndex, samples, len * sizeof(short));
 		samples += len;
 		_pstrct_streaminfo->m_iSampleArrayIndex += len;
 		if (_pstrct_streaminfo->m_iSampleArrayIndex >= SAMPLE_ARRAY_SIZE)
@@ -689,7 +790,7 @@ void  fill_audio(void *udata, Uint8 *stream, int len)//CLS_DlgStreamPusher::
 		len1 = struct_stream->m_iAudioBufSize - struct_stream->m_iAudioBufIndex;
 		if (len1 > len)
 			len1 = len;
-		memcpy(stream, (uint8_t *)struct_stream->m_pAudioBuf + struct_stream->m_iAudioBufIndex, len1);
+		//memcpy(stream, (uint8_t *)struct_stream->m_pAudioBuf + struct_stream->m_iAudioBufIndex, len1);
 		audio_len -= len;
 		len -= len1;
 		stream += len1;
@@ -700,88 +801,6 @@ void  fill_audio(void *udata, Uint8 *stream, int len)//CLS_DlgStreamPusher::
 	struct_stream->m_iAudioWriteBufSize = struct_stream->m_iAudioBufSize - struct_stream->m_iAudioBufIndex;
 }
 
-int audio_thr(LPVOID lpParam)
-{
-	//采集音频，进行储存
-	int iRet = -1;
-	AVPacket		pkt;
-	AVFrame*		pFrame = NULL;
-
-	CLS_DlgStreamPusher* pThis = (CLS_DlgStreamPusher*)lpParam;
-	if (pThis == NULL){
-		TRACE("audio_thr--pThis == NULL\n");
-		return iRet;
-	}
-	if (NULL == pThis->m_pFmtAudioCtx){
-		TRACE("NULL == pThis->m_pFmtAudioCtx\n");
-		return iRet;
-	}
-	AVCodecContext* pCodec = pThis->m_pFmtAudioCtx->streams[0]->codec;
-	if (NULL == pCodec){
-		TRACE("NULL == pCodec");
-		return iRet;
-	}
-
-	struct_stream_info* pStrctStreamInfo = pThis->m_pStreamInfo;
-	if (NULL == pStrctStreamInfo){
-		TRACE("NULL == pStrctStreamInfo\n");
-		return iRet;
-	}
-
-	while (1){
-		if (pStrctStreamInfo->m_iAbortRequest){
-			break;
-		}
-		pkt.data = NULL;
-		pkt.size = 0;
-		if (av_read_frame(pThis->m_pFmtAudioCtx, &pkt) < 0 || _kbhit() != 0){
-			continue;
-		}
-
-		if (!pFrame) {
-			if (!(pFrame = avcodec_alloc_frame())){
-				TRACE("!(strct_stream_info->m_pAudioFrame = avcodec_alloc_frame())\n");
-				goto END;
-			}
-		}
-		else{
-			avcodec_get_frame_defaults(pFrame);
-		}
-
-		int gotframe = -1;
-		if (avcodec_decode_audio4(pThis->m_pFmtAudioCtx->streams[0]->codec, pFrame, &gotframe, &pkt) < 0){
-			TRACE("can not decoder a frame\n");
-			break;
-		}
-		av_free_packet(&pkt);
-
-		if (!gotframe){
-			//没有获取到数据，继续下一次
-			TRACE("avcodec_decode_audio4 gotframe is 0!\n");
-			continue;
-		}
-
-		SDL_mutexP(pStrctStreamInfo->m_pAudioMutex);
-		if (NULL == pStrctStreamInfo->m_pAudioFifo){
-			pStrctStreamInfo->m_pAudioFifo = av_audio_fifo_alloc(pThis->m_pFmtAudioCtx->streams[0]->codec->sample_fmt,
-				pThis->m_pFmtAudioCtx->streams[0]->codec->channels, 30 * pFrame->nb_samples);
-		}
-
-		int buf_space = av_audio_fifo_space(pStrctStreamInfo->m_pAudioFifo);
-		if (buf_space >= pFrame->nb_samples){
-			av_audio_fifo_write(pStrctStreamInfo->m_pAudioFifo, (void **)pFrame->data, pFrame->nb_samples);
-		}
-		else if (buf_space > 0){
-			av_audio_fifo_write(pStrctStreamInfo->m_pAudioFifo, (void **)pFrame->data, buf_space);
-		}
-		SDL_mutexV(pStrctStreamInfo->m_pAudioMutex);
-	}
-	iRet = 1;
-
-END:
-	av_frame_free(&pFrame);
-	return iRet;
-}
 void CLS_DlgStreamPusher::InitData()
 {
 	m_pStreamInfo = (struct_stream_info *)calloc(1, sizeof(struct_stream_info));
@@ -823,8 +842,6 @@ void CLS_DlgStreamPusher::InitData()
 	m_pStreamInfo->m_iShowMode = SHOW_MODE_NONE;
 	m_pStreamInfo->m_pAudioRefreshThr = NULL;
 	m_pStreamInfo->m_pVideoRefreshThr = NULL;
-
-	m_pThreadEvent = NULL;
 }
 
 char* CLS_DlgStreamPusher::GetDeviceName(int _iDeviceType)
@@ -1260,6 +1277,11 @@ int push_thr(LPVOID lpParam)
 		return iRet;
 	}
 
+	if (NULL == pThis->m_pFmtRtmpCtx){
+		TRACE("NULL == pThis->m_pFmtRtmpCtx\n");
+		return iRet;
+	}
+
 	AVFrame *picture = av_frame_alloc();
 	int size = avpicture_get_size(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->pix_fmt,
 		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->width, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->height);
@@ -1387,67 +1409,19 @@ int push_thr(LPVOID lpParam)
 }
 void CLS_DlgStreamPusher::OnBnClickedOk()
 {
-	//进行推流操作
-	m_edtPusherAddr.GetWindowText(m_cstrPushAddr);
-	if (m_cstrPushAddr == ""){
-		MessageBox(_T("请输入正确的推流地址！\n"));
+	if (!m_blPushStream){
+		MessageBox(_T("请先预览设置！\n"));
 		return;
 	}
 
-	CString cstrFrameRate = "";
-	m_edtFrameRate.GetWindowText(cstrFrameRate);
-	if (strcmp(cstrFrameRate, "") == 0){
-		MessageBox(_T("请输入正确的帧率！\n"));
-		return;
-	}
-
-	m_iFrameRate = StrToInt(cstrFrameRate);
-	
-	if (OpenCamera() < 0){
-		TRACE("OpenCamera failed!/n");
-		goto END;
-	}
-
-	if (OpenAduio() < 0){
-		TRACE("OpenAduio failed!/n");
-		goto END;
-	}
-
-	if (OpenRtmpUrl() < 0){
-		TRACE("OpenRtmpUrl failed!/n");
-		goto END;
-	}
-
+	//开启推送线程
 	if (m_pPushThrid == NULL){
 		m_pPushThrid = SDL_CreateThread(push_thr, NULL, (void*)this);
 		if (NULL == m_pPushThrid){
 			MessageBox("创建推送线程失败！");
-			goto END;
+			return;
 		}
 	}
-
-	//开启视频采集线程
-	if (m_pStreamInfo->m_pVideoThr == NULL){
-		m_pStreamInfo->m_pVideoThr = SDL_CreateThread(video_thr, NULL, (void*)this);
-		if (m_pStreamInfo->m_pVideoThr == NULL){
-			TRACE("创建视频测试线程失败！\n");
-			goto END;
-		}
-	}
-
-	if (m_pStreamInfo->m_pAudioThr == NULL){
-		m_pStreamInfo->m_pAudioThr = SDL_CreateThread(audio_thr, NULL, (void*)this);
-		if (m_pStreamInfo->m_pAudioThr == NULL){
-			TRACE("创建音频测试线程失败！\n");
-			goto END;
-		}
-	}
-
-	//设置开始推流标记量
-	m_blPushStream = TRUE;
-
-END:
-	return;
 }
 
 int CLS_DlgStreamPusher::OpenCamera()
@@ -1514,6 +1488,14 @@ int CLS_DlgStreamPusher::OpenCamera()
 	//获取视频的宽与高
 	m_iSrcVideoHeight = m_pCodecVideoCtx->height;
 	m_iSrcVideoWidth = m_pCodecVideoCtx->width;
+
+
+	//获取视频宽高之后创建纹理
+	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_iSrcVideoWidth, m_iSrcVideoHeight);
+	if (NULL == m_pStreamInfo->m_pSdlTexture){
+		MessageBox(_T("初始化视频窗口失败！\n"));
+		return iRet;
+	}
 
 	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iSrcVideoWidth, m_iSrcVideoHeight, m_pCodecVideoCtx->pix_fmt,
 		m_iDstVideoWidth, m_iDstVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
@@ -1798,4 +1780,45 @@ void CLS_DlgStreamPusher::GetDevice()
 
 	//分辨率初始化
 	OnCbnSelchangeCobDeviceVideo();
+}
+
+int CLS_DlgStreamPusher::CreateVideoWindow()
+{
+	if (m_blCreateVideoWin){
+		return 0;
+	}
+
+	int iRet = -1;
+	//将CSTATIC控件和sdl显示窗口关联 
+	HWND hWnd = this->GetDlgItem(IDC_STC_PREVIEW)->GetSafeHwnd();
+	if (hWnd != NULL){
+		if (NULL != m_pStreamInfo && NULL == m_pStreamInfo->m_pShowScreen){
+			m_pStreamInfo->m_pShowScreen = SDL_CreateWindowFrom((void*)hWnd);
+			if (m_pStreamInfo->m_pShowScreen == NULL){
+				MessageBox(_T("初始化视频窗口失败！\n"));
+				return iRet;
+			}
+			RECT rectDisPlay;
+			this->GetDlgItem(IDC_STC_PREVIEW)->GetWindowRect(&rectDisPlay);
+			m_pStreamInfo->m_xLeft = rectDisPlay.left;
+			m_pStreamInfo->m_yTop = rectDisPlay.top;
+			m_pStreamInfo->m_width = rectDisPlay.right - rectDisPlay.left;
+			m_pStreamInfo->m_height = rectDisPlay.bottom - rectDisPlay.top;
+		}
+	}
+
+	if (NULL == m_pStreamInfo->m_pShowScreen){
+		MessageBox(_T("初始化视频窗口失败！\n"));
+		return iRet;
+	}
+
+	m_pStreamInfo->m_pSdlRender = SDL_CreateRenderer(m_pStreamInfo->m_pShowScreen, -1, 0);
+	if (NULL == m_pStreamInfo->m_pSdlRender){
+		MessageBox(_T("初始化视频窗口失败！\n"));
+		return iRet;
+	}
+
+	m_blCreateVideoWin = TRUE;
+	iRet = 0;
+	return iRet;
 }

@@ -116,7 +116,7 @@ typedef struct stream_info{
 	AVStream				*m_pVideoStream;			//视频流
 	uint8_t				*m_pVideoDecPicSize;		//视频解码Pic大小
 	uint8_t				*m_pPushPicSize;			//推送Pic大小
-	SwsContext			*m_pVideoSwsCtx;
+	SwsContext			*m_pVideoSwsCtx;			//视频变化ctx
 	
 	/************************视频相关参数-end***********************/
 }struct_stream_info;
@@ -138,8 +138,6 @@ public:
 // 实现
 protected:
 	HICON m_hIcon;
-
-	CWinThread *m_pThreadEvent;					//事件处理线程
 
 	// 生成的消息映射函数
 	virtual BOOL OnInitDialog();
@@ -318,11 +316,13 @@ private:
 	**********************/
 	int OpenRtmpUrl();
 
-	CString									m_cstrFilePath;	//推送文件路径
-	HBRUSH									m_bkBrush;		//背景刷
-	BOOL										m_blUrl;			//是否网络流推送
-
-	std::map<int, std::vector<std::string>>	m_mapDeviceInfo;	//设备信息容器
+	/**********************
+	method: 创建视频播放窗口
+	param:
+	return: <0：创建失败
+			=0：创建成功
+	**********************/
+	int CreateVideoWindow();
 
 public:
 	/**********************
@@ -339,11 +339,17 @@ public:
 	**********************/
 	void EventLoop(struct_stream_info *_pstrct_streaminfo);
 
+	HBRUSH									m_bkBrush;		//背景刷
 	struct_stream_info*						m_pStreamInfo;	//音视频全局结构体
 	BOOL										m_blVideoShow;	//是否显示视频
 	BOOL										m_blAudioShow;	//是否显示音频
-	BOOL										m_blPushStream;	//是否进行推流
+	BOOL										m_blCreateVideoWin;//是否创建视频窗口
+	BOOL										m_blUrl;			//是否网络流推送
+	BOOL										m_blPushStream;	//是否可以推流
+	BOOL										m_blPreview;		//是否进行视频预览
+
 	CString									m_cstrPushAddr;	//推流地址
+	CString									m_cstrFilePath;	//推送文件路径
 	AVFormatContext						   *m_pFmtVideoCtx;	//视频采集format
 	AVFormatContext						   *m_pFmtAudioCtx;	//音频采集format
 	AVFormatContext						   *m_pFmtRtmpCtx;	//rtmp推送format
@@ -359,5 +365,6 @@ public:
 	int										m_iDstVideoWidth;//输出视频宽
 	int										m_iFrameRate;	//帧率
 	SDL_Thread							   *m_pPushThrid;	//推流线程
+	map<int, std::vector<std::string>>		m_mapDeviceInfo;	//设备信息容器
 	map<int, map<int, int>>					m_mapResolution;	//分辨率容器
 };
