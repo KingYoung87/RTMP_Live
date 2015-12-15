@@ -49,8 +49,10 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_pFmtVideoCtx = NULL;
 	m_pFmtAudioCtx = NULL;
 	m_pFmtRtmpCtx = NULL;
+	m_pFmtFileCtx = NULL;
 	m_pCodecVideoCtx = NULL;
-	m_pPushThrid = NULL;
+	m_pPushStreamThrid = NULL;
+	m_pPushFileThrid = NULL;
 	m_iVideoIndex = -1;
 	m_iVideoOutIndex = -1;
 	m_iAudioOutIndex = -1;
@@ -288,7 +290,244 @@ END:
 	return iRet;
 }
 
-// CLS_DlgStreamPusher 消息处理程序
+int push_thr(LPVOID lpParam)
+{
+	int iRet = -1;
+	int64_t cur_pts_v = 0, cur_pts_a = 0;
+	int	frame_video_index = 0;
+	int frame_audio_index = 0;
+
+	CLS_DlgStreamPusher *pThis = (CLS_DlgStreamPusher*)lpParam;
+	if (NULL == pThis){
+		TRACE("NULL == pThis\n");
+		return iRet;
+	}
+
+	struct_stream_info* pStrctStreamInfo = pThis->m_pStreamInfo;
+	if (NULL == pStrctStreamInfo){
+		TRACE("NULL == pStrctStreamInfo\n");
+		return iRet;
+	}
+
+	if (NULL == pThis->m_pFmtRtmpCtx){
+		TRACE("NULL == pThis->m_pFmtRtmpCtx\n");
+		return iRet;
+	}
+
+	AVFrame *picture = av_frame_alloc();
+	int size = avpicture_get_size(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->pix_fmt,
+		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->width, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->height);
+	pStrctStreamInfo->m_pPushPicSize = (uint8_t*)av_malloc(size);
+
+	AVPacket pkt;//视频包
+	AVPacket pkt_out;//声音包
+	AVFrame *frame;//声音帧
+	while (1){
+		if (pStrctStreamInfo->m_iAbortRequest){
+			break;
+		}
+		if (av_compare_ts(cur_pts_v, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base,
+			cur_pts_a, pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base) <= 0){
+			//视频处理
+			if (av_fifo_size(pStrctStreamInfo->m_pVideoFifo) >= size){
+				SDL_mutexP(pStrctStreamInfo->m_pVideoMutex);
+				av_fifo_generic_read(pStrctStreamInfo->m_pVideoFifo, pStrctStreamInfo->m_pPushPicSize, size, NULL);
+				SDL_mutexV(pStrctStreamInfo->m_pVideoMutex);
+
+				avpicture_fill((AVPicture *)picture, pStrctStreamInfo->m_pPushPicSize,
+					pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
+					pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width,
+					pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
+
+				//pts = n * (（1 / timbase）/ fps);
+				picture->pts = frame_video_index * ((pThis->m_pFmtVideoCtx->streams[0]->time_base.den / pThis->m_pFmtVideoCtx->streams[0]->time_base.num) / pThis->m_iFrameRate);
+
+				int got_picture = 0;
+				av_init_packet(&pkt);
+				pkt.data = NULL;
+				pkt.size = 0;
+				iRet = avcodec_encode_video2(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec, &pkt, picture, &got_picture);
+				if (iRet < 0){
+					//编码错误,不理会此帧
+					av_free_packet(&pkt);
+					continue;
+				}
+
+				if (got_picture == 1){
+					pkt.stream_index = pThis->m_iVideoOutIndex;
+					pkt.pts = av_rescale_q(pkt.pts, pThis->m_pFmtVideoCtx->streams[0]->time_base,
+						pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base);
+					pkt.dts = av_rescale_q(pkt.dts, pThis->m_pFmtVideoCtx->streams[0]->time_base,
+						pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base);
+					if (pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->coded_frame->key_frame){
+						pkt.flags |= AV_PKT_FLAG_KEY;
+					}
+
+					TRACE("------video pts-------is [%d]\n", pkt.pts);
+					cur_pts_v = pkt.pts;
+
+					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt) < 0){
+						TRACE("av_interleaved_write_frame video err!\n");
+					}
+					av_free_packet(&pkt);
+					frame_video_index++;
+				}
+			}
+		}
+		else{
+
+			//Audio
+			if (NULL == pStrctStreamInfo->m_pAudioFifo){
+				continue;//还未初始化fifo
+			}
+			if (av_audio_fifo_size(pStrctStreamInfo->m_pAudioFifo) >=
+				(pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size > 0 ? pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size : 1024))
+			{
+				frame = av_frame_alloc();
+				frame->nb_samples = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size > 0 ? pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size : 1024;
+				frame->channel_layout = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->channel_layout;
+				frame->format = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->sample_fmt;
+				frame->sample_rate = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->sample_rate;
+				av_frame_get_buffer(frame, 0);
+
+				SDL_mutexP(pStrctStreamInfo->m_pAudioMutex);
+				av_audio_fifo_read(pStrctStreamInfo->m_pAudioFifo, (void **)frame->data,
+					(pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size > 0 ? pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size : 1024));
+				SDL_mutexV(pStrctStreamInfo->m_pAudioMutex);
+
+				av_init_packet(&pkt_out);
+				int got_picture = -1;
+				pkt_out.data = NULL;
+				pkt_out.size = 0;
+
+				frame->pts = frame_audio_index * pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size;
+				if (avcodec_encode_audio2(pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec, &pkt_out, frame, &got_picture) < 0){
+					TRACE("can not decoder a frame");
+					av_free_packet(&pkt_out);
+					continue;
+				}
+				if (NULL == pkt_out.data){
+					TRACE("NULL == pkt_out.data");
+					av_free_packet(&pkt_out);
+					continue;
+				}
+				if (got_picture == 1){
+					pkt_out.stream_index = pThis->m_iAudioOutIndex;
+
+					pkt_out.pts = av_rescale_q(pkt_out.pts, pThis->m_pFmtAudioCtx->streams[0]->time_base,
+						pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base);
+					pkt_out.dts = av_rescale_q(pkt_out.dts, pThis->m_pFmtAudioCtx->streams[0]->time_base,
+						pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base);
+
+					TRACE("~~~~audio pts~~~~~is [%d]\n", pkt_out.pts);
+
+					cur_pts_a = pkt_out.pts;
+					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt_out) < 0){
+						TRACE("av_interleaved_write_frame audio err!\n");
+					}
+					av_free_packet(&pkt_out);
+					frame_audio_index++;
+				}
+				av_frame_free(&frame);
+			}
+		}
+	}
+
+	//推送结束
+	av_write_trailer(pThis->m_pFmtRtmpCtx);
+	av_frame_free(&picture);
+
+	return iRet;
+}
+
+int push_file_thr(LPVOID lpParam)
+{
+	int iRet = -1;
+	int iFrameIndex = 0;
+	int64_t iStartTime = 0;
+	AVPacket pkt;
+	CLS_DlgStreamPusher*	pThis = (CLS_DlgStreamPusher*)lpParam;
+	if (NULL == pThis){
+		TRACE("NULL == pThis\n");
+		goto END;
+	}
+
+	struct_stream_info* pStrctStreamInfo = pThis->m_pStreamInfo;
+	if (NULL == pStrctStreamInfo){
+		TRACE("NULL == pStrctStreamInfo\n");
+		goto END;
+	}
+
+	if (NULL == pThis->m_pFmtRtmpCtx){
+		TRACE("NULL == pThis->m_pFmtRtmpCtx\n");
+		goto END;
+	}
+
+	//当前时间
+	iStartTime = av_gettime();
+
+	while (1){
+		AVStream *pInStream, *pOutStream;
+
+		//退出之后跳出循环
+		if (pStrctStreamInfo->m_iAbortRequest){
+			break;
+		}
+
+		//从输入文件中读数据
+		pkt.data = NULL;
+		pkt.size = 0;
+		if (av_read_frame(pThis->m_pFmtFileCtx, &pkt) < 0){
+			break;
+		}
+
+		if (pkt.pts == AV_NOPTS_VALUE){
+			AVRational strctTimeBase = pThis->m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->time_base;
+			int64_t iDuration = (double)AV_TIME_BASE / av_q2d(pThis->m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->r_frame_rate);
+			pkt.pts = (double)(iFrameIndex * iDuration) / (double)(av_q2d(strctTimeBase) * AV_TIME_BASE);
+			pkt.dts = pkt.pts;
+			pkt.duration = (double)iDuration / (double)(av_q2d(strctTimeBase) * AV_TIME_BASE);
+		}
+
+		//计算延迟
+		if (pkt.stream_index == pThis->m_iVideoIndex){
+			AVRational strctTimeBase = pThis->m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->time_base;
+			AVRational strctTimeBaseQ = { 1, AV_TIME_BASE };
+			int64_t iPts = av_rescale_q(pkt.dts, strctTimeBase, strctTimeBaseQ);
+			int64_t iNowTime = av_gettime() - iStartTime;
+			if (iPts > iNowTime){
+				av_usleep(iPts - iNowTime);
+			}
+		}
+		pInStream = pThis->m_pFmtFileCtx->streams[pkt.stream_index];
+		pOutStream = pThis->m_pFmtRtmpCtx->streams[pkt.stream_index];
+
+		if (NULL == pInStream || NULL == pOutStream){
+			TRACE("NULL == pInStream || NULL == pOutStream!\n");
+			break;
+		}
+
+		//时间戳
+		pkt.pts = av_rescale_q_rnd(pkt.pts, pInStream->time_base, pOutStream->time_base, (AVRounding)(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
+		pkt.dts = av_rescale_q_rnd(pkt.dts, pInStream->time_base, pOutStream->time_base, (AVRounding)(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
+		pkt.duration = av_rescale_q(pkt.duration, pInStream->time_base, pOutStream->time_base);
+		pkt.pos = -1;
+
+		if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt) < 0){
+			TRACE("av_interleaved_write_frame err!\n");
+			break;
+		}
+
+		av_free_packet(&pkt);
+		iFrameIndex ++;
+		TRACE("-----------iFrameIndex = [%d]-----------------\n", iFrameIndex);
+	}
+
+	av_write_trailer(pThis->m_pFmtRtmpCtx);
+	iRet = 0;
+END:
+	return iRet;
+}
 
 BOOL CLS_DlgStreamPusher::OnInitDialog()
 {
@@ -390,10 +629,16 @@ void CLS_DlgStreamPusher::OnBnClickedBtnOpenLocalFile()
 	CFileDialog dlg(TRUE, NULL, NULL, OFN_PATHMUSTEXIST | OFN_HIDEREADONLY, szFilter, NULL);
 	if (IDOK == dlg.DoModal()){
 		m_cstrFilePath = dlg.GetPathName();
+		m_edtLocalFilePath.SetWindowText(m_cstrFilePath);
 	}
 	else{
 		MessageBox(_T("获取文件名称失败 请重新加载"), NULL, MB_OK);
 		m_cstrFilePath = "";
+		return;
+	}
+
+	if (OpenFile() < 0){
+		TRACE("文件打开失败！\n");
 		return;
 	}
 }
@@ -403,13 +648,6 @@ void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 {
 	if (m_blPreview){
 		TRACE("Preview started!\n");
-		return;
-	}
-
-	//进行推流操作
-	m_edtPusherAddr.GetWindowText(m_cstrPushAddr);
-	if (m_cstrPushAddr == ""){
-		MessageBox(_T("请输入正确的推流地址！\n"));
 		return;
 	}
 
@@ -437,8 +675,8 @@ void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 		goto END;
 	}
 
-	if (OpenRtmpUrl() < 0){
-		TRACE("OpenRtmpUrl failed!/n");
+	if (OpenRtmpAddr() < 0){
+		TRACE("OpenRtmpAddr failed!/n");
 		goto END;
 	}
 
@@ -567,9 +805,14 @@ void CLS_DlgStreamPusher::UnInitInfo()
 	if (NULL != m_pStreamInfo){
 		m_pStreamInfo->m_iAbortRequest = 1;
 
-		if (NULL != m_pPushThrid){
-			SDL_WaitThread(m_pPushThrid, NULL);
-			m_pPushThrid = NULL;
+		if (NULL != m_pPushStreamThrid){
+			SDL_WaitThread(m_pPushStreamThrid, NULL);
+			m_pPushStreamThrid = NULL;
+		}
+
+		if (NULL != m_pPushFileThrid){
+			SDL_WaitThread(m_pPushFileThrid, NULL);
+			m_pPushFileThrid = NULL;
 		}
 
 		if (m_pStreamInfo->m_pVideoThr){
@@ -656,6 +899,12 @@ void CLS_DlgStreamPusher::UnInitInfo()
 		avformat_close_input(&m_pFmtAudioCtx);
 		avformat_free_context(m_pFmtAudioCtx);
 		m_pFmtAudioCtx = NULL;
+	}
+
+	if (NULL != m_pFmtFileCtx){
+		avformat_close_input(&m_pFmtFileCtx);
+		avformat_free_context(m_pFmtFileCtx);
+		m_pFmtFileCtx = NULL;
 	}
 	return;
 }
@@ -1258,168 +1507,36 @@ void CLS_DlgStreamPusher::OnBnClickedChkWriteFile()
 {
 }
 
-int push_thr(LPVOID lpParam)
-{
-	int iRet = -1;
-	int64_t cur_pts_v = 0, cur_pts_a = 0;
-	int	frame_video_index = 0;
-	int frame_audio_index = 0;
-
-	CLS_DlgStreamPusher *pThis = (CLS_DlgStreamPusher*)lpParam;
-	if (NULL == pThis){
-		TRACE("NULL == pThis\n");
-		return iRet;
-	}
-
-	struct_stream_info* pStrctStreamInfo = pThis->m_pStreamInfo;
-	if (NULL == pStrctStreamInfo){
-		TRACE("NULL == pStrctStreamInfo\n");
-		return iRet;
-	}
-
-	if (NULL == pThis->m_pFmtRtmpCtx){
-		TRACE("NULL == pThis->m_pFmtRtmpCtx\n");
-		return iRet;
-	}
-
-	AVFrame *picture = av_frame_alloc();
-	int size = avpicture_get_size(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->pix_fmt,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->width, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoIndex]->codec->height);
-	pStrctStreamInfo->m_pPushPicSize = (uint8_t*)av_malloc(size);
-
-	AVPacket pkt;//视频包
-	AVPacket pkt_out;//声音包
-	AVFrame *frame;//声音帧
-	while (1){
-		if (pStrctStreamInfo->m_iAbortRequest){
-			break;
-		}
-		if (av_compare_ts(cur_pts_v, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base,
-			cur_pts_a, pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base) <= 0){
-			//视频处理
-			if (av_fifo_size(pStrctStreamInfo->m_pVideoFifo) >= size){
-				SDL_mutexP(pStrctStreamInfo->m_pVideoMutex);
-				av_fifo_generic_read(pStrctStreamInfo->m_pVideoFifo, pStrctStreamInfo->m_pPushPicSize, size, NULL);
-				SDL_mutexV(pStrctStreamInfo->m_pVideoMutex);
-
-				avpicture_fill((AVPicture *)picture, pStrctStreamInfo->m_pPushPicSize,
-					pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
-					pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width,
-					pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
-
-				//pts = n * (（1 / timbase）/ fps);
-				picture->pts = frame_video_index * ((pThis->m_pFmtVideoCtx->streams[0]->time_base.den / pThis->m_pFmtVideoCtx->streams[0]->time_base.num) / pThis->m_iFrameRate);
-
-				int got_picture = 0;
-				av_init_packet(&pkt);
-				pkt.data = NULL;
-				pkt.size = 0;
-				iRet = avcodec_encode_video2(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec, &pkt, picture, &got_picture);
-				if (iRet < 0){
-					//编码错误,不理会此帧
-					av_free_packet(&pkt);
-					continue;
-				}
-
-				if (got_picture == 1){
-					pkt.stream_index = pThis->m_iVideoOutIndex;
-					pkt.pts = av_rescale_q(pkt.pts, pThis->m_pFmtVideoCtx->streams[0]->time_base,
-						pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base);
-					pkt.dts = av_rescale_q(pkt.dts, pThis->m_pFmtVideoCtx->streams[0]->time_base,
-						pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->time_base);
-					if (pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->coded_frame->key_frame){
-						pkt.flags |= AV_PKT_FLAG_KEY;
-					}
-
-					TRACE("------video pts-------is [%d]\n", pkt.pts);
-					cur_pts_v = pkt.pts;
-
-					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt) < 0 ){
-						TRACE("av_interleaved_write_frame video err!\n");
-					}
-					av_free_packet(&pkt);
-					frame_video_index++;
-				}
-			}
-		}
-		else{
-
-			//Audio
-			if (NULL == pStrctStreamInfo->m_pAudioFifo){
-				continue;//还未初始化fifo
-			}
-			if (av_audio_fifo_size(pStrctStreamInfo->m_pAudioFifo) >=
-				(pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size > 0 ? pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size : 1024))
-			{
-				frame = av_frame_alloc();
-				frame->nb_samples = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size > 0 ? pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size : 1024;
-				frame->channel_layout = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->channel_layout;
-				frame->format = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->sample_fmt;
-				frame->sample_rate = pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->sample_rate;
-				av_frame_get_buffer(frame, 0);
-
-				SDL_mutexP(pStrctStreamInfo->m_pAudioMutex);
-				av_audio_fifo_read(pStrctStreamInfo->m_pAudioFifo, (void **)frame->data,
-					(pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size > 0 ? pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size : 1024));
-				SDL_mutexV(pStrctStreamInfo->m_pAudioMutex);
-
-				av_init_packet(&pkt_out);
-				int got_picture = -1;
-				pkt_out.data = NULL;
-				pkt_out.size = 0;
-
-				frame->pts = frame_audio_index * pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec->frame_size;
-				if (avcodec_encode_audio2(pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->codec, &pkt_out, frame, &got_picture) < 0){
-					TRACE("can not decoder a frame");
-					av_free_packet(&pkt_out);
-					continue;
-				}
-				if (NULL == pkt_out.data){
-					TRACE("NULL == pkt_out.data");
-					av_free_packet(&pkt_out);
-					continue;
-				}
-				if (got_picture == 1){
-					pkt_out.stream_index = pThis->m_iAudioOutIndex;
-
-					pkt_out.pts = av_rescale_q(pkt_out.pts, pThis->m_pFmtAudioCtx->streams[0]->time_base,
-						pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base);
-					pkt_out.dts = av_rescale_q(pkt_out.dts, pThis->m_pFmtAudioCtx->streams[0]->time_base,
-						pThis->m_pFmtRtmpCtx->streams[pThis->m_iAudioOutIndex]->time_base);
-
-					TRACE("~~~~audio pts~~~~~is [%d]\n", pkt_out.pts);
-
-					cur_pts_a = pkt_out.pts;
-					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt_out) < 0){
-						TRACE("av_interleaved_write_frame audio err!\n");
-					}
-					av_free_packet(&pkt_out);
-					frame_audio_index++;
-				}
-				av_frame_free(&frame);
-			}
-		}
-	}
-
-	//推送结束
-	av_write_trailer(pThis->m_pFmtRtmpCtx);
-	av_frame_free(&picture);
-
-	return iRet;
-}
 void CLS_DlgStreamPusher::OnBnClickedOk()
 {
-	if (!m_blPushStream){
+	if (!m_blPushStream && m_blUrl){
 		MessageBox(_T("请先预览设置！\n"));
 		return;
 	}
 
-	//开启推送线程
-	if (m_pPushThrid == NULL){
-		m_pPushThrid = SDL_CreateThread(push_thr, NULL, (void*)this);
-		if (NULL == m_pPushThrid){
-			MessageBox("创建推送线程失败！");
-			return;
+	if (OpenRtmpAddr() < 0){
+		MessageBox("文件推送失败！\n");
+		return;
+	}
+
+	if (m_blUrl){
+		//开启采集推送线程
+		if (m_pPushStreamThrid == NULL){
+			m_pPushStreamThrid = SDL_CreateThread(push_thr, NULL, (void*)this);
+			if (NULL == m_pPushStreamThrid){
+				MessageBox("创建推送线程失败！\n");
+				return;
+			}
+		}
+	}
+	else{
+		//开启文件推送线程
+		if (m_pPushFileThrid == NULL){
+			m_pPushFileThrid = SDL_CreateThread(push_file_thr, NULL, (void*)this);
+			if (NULL == m_pPushFileThrid){
+				MessageBox("创建推送线程失败！\n");
+				return;
+			}
 		}
 	}
 }
@@ -1519,6 +1636,30 @@ int CLS_DlgStreamPusher::OpenCamera()
 	return iRet;
 }
 
+int CLS_DlgStreamPusher::OpenFile()
+{
+	int iRet = -1;
+	if (m_cstrFilePath == ""){
+		MessageBox("打开文件有误！\n");
+		goto END;
+	}
+
+	m_pFmtFileCtx = avformat_alloc_context();
+	if (avformat_open_input(&m_pFmtFileCtx, m_cstrFilePath, 0, 0) < 0){
+		TRACE("avformat_open_input file err ! (%s)", m_cstrFilePath.GetBuffer());
+		goto END;
+	}
+
+	if (avformat_find_stream_info(m_pFmtFileCtx, 0) < 0 ){
+		TRACE("avformat_find_stream_info err!\n");
+		goto END;
+	}
+
+	iRet = 0;
+END:
+	return iRet;
+}
+
 int CLS_DlgStreamPusher::OpenAduio()
 {
 	int iRet = -1;
@@ -1581,14 +1722,23 @@ int CLS_DlgStreamPusher::OpenAduio()
 	return iRet;
 }
 
-int CLS_DlgStreamPusher::OpenRtmpUrl()
+int CLS_DlgStreamPusher::OpenRtmpAddr()
 {
 	int iRet = -1;
 	AVOutputFormat		*pStreamOutfmt = NULL;
-	if (NULL == m_pStreamInfo || NULL == m_pCodecVideoCtx){
-		TRACE("NULL == m_pStreamInfo || NULL == m_pCodecVideoCtx");
+
+	//进行推流操作
+	m_edtPusherAddr.GetWindowText(m_cstrPushAddr);
+	if (m_cstrPushAddr == ""){
+		MessageBox(_T("请输入正确的推流地址！\n"));
 		return iRet;
 	}
+
+	if (NULL == m_pStreamInfo){
+		TRACE("NULL == m_pStreamInfo\n");
+		return iRet;
+	}
+
 	//根据推流地址获取到AVFormatContext
 	//m_cstrPushAddr = "test.flv";
 	avformat_alloc_output_context2(&m_pFmtRtmpCtx, NULL, "flv", m_cstrPushAddr);
@@ -1603,12 +1753,48 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 		return iRet;
 	}
 
+	if (m_blUrl){
+		if (NULL == m_pCodecVideoCtx){
+			TRACE("NULL == m_pCodecVideoCtx\n");
+			return iRet;
+		}
+		if (OpenRtmpUrl() < 0){
+			TRACE("OpenRtmpUrl err\n");
+			return iRet;
+		}
+	}
+	else if (OpenRtmpFile() < 0){
+		TRACE("OpenRtmpFile err!\n");
+		return iRet;
+	}
+
+	//写头
+	if (!(pStreamOutfmt->flags & AVFMT_NOFILE)) {
+		iRet = avio_open(&m_pFmtRtmpCtx->pb, m_cstrPushAddr, AVIO_FLAG_WRITE);
+		if (iRet < 0) {
+			TRACE("Could not open output URL '%s'", m_cstrPushAddr);
+			return iRet;
+		}
+	}
+
+	iRet = avformat_write_header(m_pFmtRtmpCtx, NULL);
+	if (iRet < 0) {
+		TRACE("Error occurred when opening output URL\n");
+		return iRet;
+	}
+
+	return iRet;
+}
+
+int CLS_DlgStreamPusher::OpenRtmpUrl()
+{
+	int iRet = -1;
 	//视频推流信息
 	if (NULL != m_pFmtVideoCtx){
 		m_pStreamInfo->m_pVideoStream = avformat_new_stream(m_pFmtRtmpCtx, NULL);
 		if (!m_pStreamInfo->m_pVideoStream) {
 			TRACE("Failed allocating output stream\n");
-			return iRet;
+			goto END;
 		}
 		m_pStreamInfo->m_pVideoStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_H264);
 		m_pStreamInfo->m_pVideoStream->codec->codec_tag = 0;
@@ -1636,7 +1822,7 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 		//打开视频编码器
 		if ((avcodec_open2(m_pStreamInfo->m_pVideoStream->codec, m_pStreamInfo->m_pVideoStream->codec->codec, NULL)) < 0){
 			TRACE("can not open the encoder\n");
-			return iRet;
+			goto END;
 		}
 
 		m_pStreamInfo->m_pVideoFifo = av_fifo_alloc(30 * avpicture_get_size(AV_PIX_FMT_YUV420P, m_pStreamInfo->m_pVideoStream->codec->width, m_pStreamInfo->m_pVideoStream->codec->height));
@@ -1647,11 +1833,11 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 		m_pStreamInfo->m_pAudioStream = avformat_new_stream(m_pFmtRtmpCtx, NULL);
 		if (NULL == m_pStreamInfo->m_pAudioStream){
 			TRACE("NULL == m_pStreamInfo->m_pAudioStream");
-			return iRet;
+			goto END;
 		}
 		if (NULL == m_pFmtRtmpCtx->streams[m_iAudioIndex]){
 			TRACE("NULL == m_pFmtRtmpCtx->streams[m_iAudioIndex]\n");
-			return iRet;
+			goto END;
 		}
 		m_pStreamInfo->m_pAudioStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
 		m_pStreamInfo->m_pAudioStream->codec->sample_rate = m_pCodecAudioCtx->sample_rate;
@@ -1675,25 +1861,85 @@ int CLS_DlgStreamPusher::OpenRtmpUrl()
 		//打开音频编码器
 		if (avcodec_open2(m_pStreamInfo->m_pAudioStream->codec, m_pStreamInfo->m_pAudioStream->codec->codec, 0) < 0){
 			TRACE("avcodec_open2 failed !\n");
-			return iRet;
+			goto END;
+		}
+	}
+	
+	iRet = 0;
+END:
+	return iRet;
+}
+int CLS_DlgStreamPusher::OpenRtmpFile()
+{
+	int iRet = -1;
+	if (NULL == m_pFmtFileCtx){
+		TRACE("NULL == m_pFmtFileCtx");
+		goto END;
+	}
+	if (NULL == m_pFmtRtmpCtx){
+		TRACE("NULL == m_pFmtRtmpCtx\n");
+		goto END;
+	}
+
+	for (int i = 0; i < m_pFmtFileCtx->nb_streams; i++){
+		AVStream* pInStream = NULL;
+		if (m_pFmtFileCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO){
+			pInStream = m_pFmtFileCtx->streams[i];
+			if (NULL == pInStream){
+				TRACE("NULL == pInStream\n");
+				goto END;
+			}
+			m_pStreamInfo->m_pVideoStream = avformat_new_stream(m_pFmtRtmpCtx, pInStream->codec->codec);
+			if (NULL == m_pStreamInfo->m_pVideoStream) {
+				TRACE("NULL == m_pStreamInfo->m_pVideoStream\n");
+				goto END;
+			}
+			m_iVideoIndex = i;
+			//m_pStreamInfo->m_pVideoStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+
+			//拷贝视频编码器信息
+			if (avcodec_copy_context(m_pStreamInfo->m_pVideoStream->codec, pInStream->codec) < 0){
+				TRACE("avcodec_copy_context video err!\n");
+				goto END;
+			}
+			m_pStreamInfo->m_pVideoStream->codec->codec_tag = 0;
+
+			if (m_pFmtRtmpCtx->oformat->flags & AVFMT_GLOBALHEADER){
+				m_pStreamInfo->m_pVideoStream->codec->flags |= CODEC_FLAG_GLOBAL_HEADER;
+			}
+		}
+		else if (m_pFmtFileCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO){
+			pInStream = m_pFmtFileCtx->streams[i];
+			if (NULL == pInStream){
+				TRACE("NULL == pInStream\n");
+				goto END;
+			}
+			m_pStreamInfo->m_pAudioStream = avformat_new_stream(m_pFmtRtmpCtx, pInStream->codec->codec);
+			if (NULL == m_pStreamInfo->m_pAudioStream){
+				TRACE("NULL == m_pStreamInfo->m_pAudioStream\n");
+				goto END;
+			}
+			m_iAudioIndex = i;
+			//m_pStreamInfo->m_pAudioStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+
+			//拷贝音频编码器信息
+			if (avcodec_copy_context(m_pStreamInfo->m_pAudioStream->codec, pInStream->codec) < 0){
+				TRACE("avcodec_copy_context audio err!\n");
+				goto END;
+			}
+
+			m_pStreamInfo->m_pAudioStream->codec->codec_tag = 0;
+			if (m_pFmtRtmpCtx->oformat->flags & AVFMT_GLOBALHEADER){
+				m_pStreamInfo->m_pAudioStream->codec->flags |= CODEC_FLAG_GLOBAL_HEADER;
+			}
+		}
+		else {
+			break;
 		}
 	}
 
-	//写头
-	if (!(pStreamOutfmt->flags & AVFMT_NOFILE)) {
-		iRet = avio_open(&m_pFmtRtmpCtx->pb, m_cstrPushAddr, AVIO_FLAG_WRITE);
-		if (iRet < 0) {
-			TRACE("Could not open output URL '%s'", m_cstrPushAddr);
-			return iRet;
-		}
-	}
-
-	iRet = avformat_write_header(m_pFmtRtmpCtx, NULL);
-	if (iRet < 0) {
-		TRACE("Error occurred when opening output URL\n");
-		return iRet;
-	}
-
+	iRet = 0;
+END:
 	return iRet;
 }
 

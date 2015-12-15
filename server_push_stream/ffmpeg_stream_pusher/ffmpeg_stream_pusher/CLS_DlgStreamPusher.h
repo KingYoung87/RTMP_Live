@@ -309,12 +309,36 @@ private:
 	int OpenAduio();
 
 	/**********************
+	method: 打开输入文件
+	param:
+	return: <0：打开失败
+			=0：打开成功
+	**********************/
+	int OpenFile();
+
+	/**********************
 	method: 打开推流地址
 	param:
 	return: <0：打开失败
 			=0：打开成功
 	**********************/
+	int OpenRtmpAddr();
+
+	/**********************
+	method: 打开URL推流地址
+	param:
+	return: <0：打开失败
+			=0：打开成功
+	**********************/
 	int OpenRtmpUrl();
+
+	/**********************
+	method: 打开文件推流地址
+	param:
+	return: <0：打开失败
+			=0：打开成功
+	**********************/
+	int OpenRtmpFile();
 
 	/**********************
 	method: 创建视频播放窗口
@@ -353,6 +377,7 @@ public:
 	AVFormatContext						   *m_pFmtVideoCtx;	//视频采集format
 	AVFormatContext						   *m_pFmtAudioCtx;	//音频采集format
 	AVFormatContext						   *m_pFmtRtmpCtx;	//rtmp推送format
+	AVFormatContext						   *m_pFmtFileCtx;	//文件format
 	AVCodecContext						   *m_pCodecVideoCtx;//视频采集解码器信息
 	AVCodecContext						   *m_pCodecAudioCtx;//音频采集解码器信息
 	int										m_iVideoIndex;	//视频采集解码器索引
@@ -364,7 +389,8 @@ public:
 	int										m_iDstVideoHeight;//输出视频高
 	int										m_iDstVideoWidth;//输出视频宽
 	int										m_iFrameRate;	//帧率
-	SDL_Thread							   *m_pPushThrid;	//推流线程
+	SDL_Thread							   *m_pPushStreamThrid;//推流线程
+	SDL_Thread							   *m_pPushFileThrid;//推文件线程
 	map<int, std::vector<std::string>>		m_mapDeviceInfo;	//设备信息容器
 	map<int, map<int, int>>					m_mapResolution;	//分辨率容器
 };
