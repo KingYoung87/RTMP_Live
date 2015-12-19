@@ -121,6 +121,11 @@ typedef struct stream_info{
 	/************************视频相关参数-end***********************/
 }struct_stream_info;
 
+typedef struct PUSH_FILE_STREAM{
+	CString			m_cstrFilePath;	//文件名称
+	AVFormatContext *m_pFmtFileCtx;	//文件format
+}STRCT_PUSH_FILE;
+
 // CLS_DlgStreamPusher 对话框
 class CLS_DlgStreamPusher : public CDialog
 {
@@ -155,21 +160,30 @@ public:
 	afx_msg void OnCbnSelchangeCobDeviceVideo();
 	afx_msg void OnCbnSelchangeCobResolution();
 	afx_msg void OnBnClickedBtnRefreshvideo();
-
+	afx_msg void OnBnClickedBtnOpenLocalFiles();
+	afx_msg void OnCbnSelchangeCboPushAddr();
+	afx_msg void OnNMDblclkListLocalFiles(NMHDR *pNMHDR, LRESULT *pResult);
+	afx_msg void OnNMRClickListLocalFiles(NMHDR *pNMHDR, LRESULT *pResult);
 	afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
+	virtual BOOL OnCommand(WPARAM wParam, LPARAM lParam);
 
 	//控件定义
-	CEdit	m_edtLocalFilePath;
-	CEdit	m_edtPusherAddr;
 	CEdit	m_edtFrameRate;
 	CButton m_chkSrcType;
 	CButton m_chkShowVideo;
 	CButton m_chkWriteFile;
 	CButton m_btnOpenLocalFile;
+	CButton m_btnOpenFiles;
+	CStatic m_stcSelFile;
 	CStatic m_stcPreview;
+	CStatic m_stcPushStatus;
 	CComboBox m_cboDeviceVideo;
 	CComboBox m_cboDeviceAudio;
 	CComboBox m_cboResolution;
+	CComboBox m_cboPushAddr;
+	CListCtrl m_lstLocalFiles;
+
+	CMenu	m_Rmenu;
 
 private:
 	/**********************
@@ -309,12 +323,19 @@ private:
 	int OpenAduio();
 
 	/**********************
-	method: 打开输入文件
-	param:
-	return: <0：打开失败
-			=0：打开成功
+	method: 将文件信息插入列表
+	param:	_cstrFilePath: 文件路径
+	return: <0：插入失败
+			=0：插入成功
 	**********************/
-	int OpenFile();
+	int InsertFileList(CString _cstrFilePath);
+
+	/**********************
+	method: 清理文件内存
+	param:	
+	return: 
+	**********************/
+	void ClearFileMem();
 
 	/**********************
 	method: 打开推流地址
@@ -348,6 +369,34 @@ private:
 	**********************/
 	int CreateVideoWindow();
 
+	/**********************
+	method: 获取当前文件夹下的所有文件
+	param:
+	return: 
+	**********************/
+	void GetFiles(CString _cstrFilePath);
+
+	/**********************
+	method: 根据情况显示控件
+	param:
+	return:
+	**********************/
+	void ShowControls(BOOL _blShow);
+
+	/**********************
+	method: 删除文件
+	param:
+	return:
+	**********************/
+	void OnDeleteItem();
+
+	/**********************
+	method: 清空文件
+	param:
+	return:
+	**********************/
+	void OnClearItems();
+
 public:
 	/**********************
 	method: 获取当前选择的音视频设备名臣
@@ -363,6 +412,13 @@ public:
 	**********************/
 	void EventLoop(struct_stream_info *_pstrct_streaminfo);
 
+	/**********************
+	method: 打开输入文件
+	param:	_cstrFilePath: 文件路径
+	return: AVFormatContext* 文件信息
+	**********************/
+	AVFormatContext* OpenFile(CString _cstrFilePath);
+
 	HBRUSH									m_bkBrush;		//背景刷
 	struct_stream_info*						m_pStreamInfo;	//音视频全局结构体
 	BOOL										m_blVideoShow;	//是否显示视频
@@ -371,13 +427,15 @@ public:
 	BOOL										m_blUrl;			//是否网络流推送
 	BOOL										m_blPushStream;	//是否可以推流
 	BOOL										m_blPreview;		//是否进行视频预览
+	BOOL										m_blPushSuccess;	//是否推送成功
+	BOOL										m_blPushSingle;	//是否推送单文件
+	BOOL										m_blPushCircle;	//是否循环推送文件
 
 	CString									m_cstrPushAddr;	//推流地址
 	CString									m_cstrFilePath;	//推送文件路径
 	AVFormatContext						   *m_pFmtVideoCtx;	//视频采集format
 	AVFormatContext						   *m_pFmtAudioCtx;	//音频采集format
 	AVFormatContext						   *m_pFmtRtmpCtx;	//rtmp推送format
-	AVFormatContext						   *m_pFmtFileCtx;	//文件format
 	AVCodecContext						   *m_pCodecVideoCtx;//视频采集解码器信息
 	AVCodecContext						   *m_pCodecAudioCtx;//音频采集解码器信息
 	int										m_iVideoIndex;	//视频采集解码器索引
@@ -389,8 +447,12 @@ public:
 	int										m_iDstVideoHeight;//输出视频高
 	int										m_iDstVideoWidth;//输出视频宽
 	int										m_iFrameRate;	//帧率
+	int										m_iLstSelIndex;	//列表选择项
 	SDL_Thread							   *m_pPushStreamThrid;//推流线程
 	SDL_Thread							   *m_pPushFileThrid;//推文件线程
 	map<int, std::vector<std::string>>		m_mapDeviceInfo;	//设备信息容器
 	map<int, map<int, int>>					m_mapResolution;	//分辨率容器
+	map<int, STRCT_PUSH_FILE>					m_mapPushFile;	//推送文件容器
+
+	STRCT_PUSH_FILE							m_strctPushFile;	//推送文件结构体
 };

@@ -12,10 +12,14 @@
 #define new DEBUG_NEW
 #endif
 
+#define PUSH_ADDR_NUM 2
+
 static  Uint8  *audio_chunk;
 static  Uint32  audio_len;
 static  Uint8  *audio_pos;
 static int64_t audio_callback_time;
+string strPushAddr[PUSH_ADDR_NUM] = { "rtmp://dqd-dl-pub.arenacdn.com/prod/fz03hK0M8lFhEADp?pass=5c1bda46fb43ff291e06cf9e9788b1bc",
+									"rtmp://live-publish.dongqiudi.com/dongqiudi/live3?key=bc21bda2fe27c512"};
 
 static char *dup_wchar_to_utf8(wchar_t *w)
 {
@@ -39,36 +43,43 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 
 	m_cstrFilePath = "";
-	m_blUrl = FALSE;
+	m_cstrPushAddr = "";
+
 	m_bkBrush = NULL;
 	m_pStreamInfo = NULL;
-	m_mapDeviceInfo.clear();
-	m_blVideoShow = FALSE;
-	m_blAudioShow = FALSE;
-	m_cstrPushAddr = "";
+	m_pFmtRtmpCtx = NULL;
 	m_pFmtVideoCtx = NULL;
 	m_pFmtAudioCtx = NULL;
-	m_pFmtRtmpCtx = NULL;
-	m_pFmtFileCtx = NULL;
-	m_pCodecVideoCtx = NULL;
-	m_pPushStreamThrid = NULL;
 	m_pPushFileThrid = NULL;
+	m_pCodecVideoCtx = NULL;
+	m_pCodecAudioCtx = NULL;
+	m_pPushStreamThrid = NULL;
+
+	m_iFrameRate = -1;
 	m_iVideoIndex = -1;
+	m_iLstSelIndex = -1;
 	m_iVideoOutIndex = -1;
 	m_iAudioOutIndex = -1;
-	m_iFrameRate = -1;
-	m_blCreateVideoWin = FALSE;
-	m_blPushStream = FALSE;
+
+	m_blUrl = FALSE;
 	m_blPreview = FALSE;
+	m_blVideoShow = FALSE;
+	m_blAudioShow = FALSE;
+	m_blPushSingle = TRUE;	//默认推送单个文件循环推送
+	m_blPushCircle = TRUE;	//默认推送文件都是循环推送
+	m_blPushStream = FALSE;
+	m_blPushSuccess = FALSE;
+	m_blCreateVideoWin = FALSE;
+
+	m_mapDeviceInfo.clear();
+	m_mapPushFile.clear();
 }
 
 void CLS_DlgStreamPusher::DoDataExchange(CDataExchange* pDX)
 {
 	CDialog::DoDataExchange(pDX);
 	DDX_Control(pDX, IDC_CHK_SRC_TYPE, m_chkSrcType);
-	DDX_Control(pDX, IDC_EDT_LOACL_FILE_PATH, m_edtLocalFilePath);
 	DDX_Control(pDX, IDC_BTN_OPEN_LOCAL_FILE, m_btnOpenLocalFile);
-	DDX_Control(pDX, IDC_EDT_PUSHER_ADDR, m_edtPusherAddr);
 	DDX_Control(pDX, IDC_STC_PREVIEW, m_stcPreview);
 	DDX_Control(pDX, IDC_COB_DEVICE_VIDEO, m_cboDeviceVideo);
 	DDX_Control(pDX, IDC_COB_DEVICE_AUDIO, m_cboDeviceAudio);
@@ -76,6 +87,11 @@ void CLS_DlgStreamPusher::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_COB_RESOLUTION, m_cboResolution);
 	DDX_Control(pDX, IDC_CHK_WRITE_FILE, m_chkWriteFile);
 	DDX_Control(pDX, IDC_EDT_FRAMERATE, m_edtFrameRate);
+	DDX_Control(pDX, IDC_LIST_LOCAL_FILES, m_lstLocalFiles);
+	DDX_Control(pDX, IDC_STC_PUSH_STATUS, m_stcPushStatus);
+	DDX_Control(pDX, IDC_BTN_OPEN_LOCAL_FILES, m_btnOpenFiles);
+	DDX_Control(pDX, IDC_CBO_PUSH_ADDR, m_cboPushAddr);
+	DDX_Control(pDX, IDC_STC_SEL_FILE_MEM, m_stcSelFile);
 }
 
 BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
@@ -92,6 +108,10 @@ BEGIN_MESSAGE_MAP(CLS_DlgStreamPusher, CDialog)
 	ON_CBN_SELCHANGE(IDC_COB_DEVICE_VIDEO, &CLS_DlgStreamPusher::OnCbnSelchangeCobDeviceVideo)
 	ON_CBN_SELCHANGE(IDC_COB_RESOLUTION, &CLS_DlgStreamPusher::OnCbnSelchangeCobResolution)
 	ON_BN_CLICKED(IDC_BTN_REFRESHVIDEO, &CLS_DlgStreamPusher::OnBnClickedBtnRefreshvideo)
+	ON_BN_CLICKED(IDC_BTN_OPEN_LOCAL_FILES, &CLS_DlgStreamPusher::OnBnClickedBtnOpenLocalFiles)
+	ON_CBN_SELCHANGE(IDC_CBO_PUSH_ADDR, &CLS_DlgStreamPusher::OnCbnSelchangeCboPushAddr)
+	ON_NOTIFY(NM_RCLICK, IDC_LIST_LOCAL_FILES, &CLS_DlgStreamPusher::OnNMRClickListLocalFiles)
+	ON_NOTIFY(NM_DBLCLK, IDC_LIST_LOCAL_FILES, &CLS_DlgStreamPusher::OnNMDblclkListLocalFiles)
 END_MESSAGE_MAP()
 
 
@@ -369,6 +389,7 @@ int push_thr(LPVOID lpParam)
 					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt) < 0){
 						TRACE("av_interleaved_write_frame video err!\n");
 					}
+					pThis->m_blPushSuccess = TRUE;
 					av_free_packet(&pkt);
 					frame_video_index++;
 				}
@@ -425,6 +446,7 @@ int push_thr(LPVOID lpParam)
 					if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt_out) < 0){
 						TRACE("av_interleaved_write_frame audio err!\n");
 					}
+					pThis->m_blPushSuccess = TRUE;
 					av_free_packet(&pkt_out);
 					frame_audio_index++;
 				}
@@ -446,6 +468,8 @@ int push_file_thr(LPVOID lpParam)
 	int iFrameIndex = 0;
 	int64_t iStartTime = 0;
 	AVPacket pkt;
+	STRCT_PUSH_FILE strct_push_file;
+
 	CLS_DlgStreamPusher*	pThis = (CLS_DlgStreamPusher*)lpParam;
 	if (NULL == pThis){
 		TRACE("NULL == pThis\n");
@@ -464,68 +488,157 @@ int push_file_thr(LPVOID lpParam)
 	}
 
 	//当前时间
-	iStartTime = av_gettime();
+	int last_video_pts = 0;
+	int last_video_dts = 0;
+	int last_audio_pts = 0;
+	int last_audio_dts = 0;
 
-	while (1){
-		AVStream *pInStream, *pOutStream;
+	bool		blReOpenFile = false;
+	bool		blAddPkt = false;
+	memcpy(&strct_push_file, &pThis->m_strctPushFile, sizeof(STRCT_PUSH_FILE));
+	while (pThis->m_blPushCircle){
+		if (blReOpenFile){
+			blAddPkt = true;
+			strct_push_file.m_pFmtFileCtx = pThis->OpenFile(pThis->m_strctPushFile.m_cstrFilePath);
+			if (NULL == strct_push_file.m_pFmtFileCtx){
+				TRACE("NULL == pFmtCtx!\n");
+				break;
+			}
+		}
+
+		iFrameIndex = 0;
+		iStartTime = av_gettime();
+		blReOpenFile = true;	//设置循环播放
+
+		int last_video_pts_need_clear = 0;
+		int last_video_dts_need_clear = 0;
+		int last_audio_pts_need_clear = 0;
+		int last_audio_dts_need_clear = 0;
+		while (1){
+			AVStream *pInStream, *pOutStream;
+
+			//退出之后跳出循环
+			if (pStrctStreamInfo->m_iAbortRequest){
+				break;
+			}
+
+			//从输入文件中读数据
+			pkt.data = NULL;
+			pkt.size = 0;
+			if (av_read_frame(strct_push_file.m_pFmtFileCtx, &pkt) < 0){
+				pThis->m_blPushSuccess = FALSE;
+				break;
+			}
+
+			if (pkt.pts == AV_NOPTS_VALUE){
+				AVRational strctTimeBase = strct_push_file.m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->time_base;
+				int64_t iDuration = (double)AV_TIME_BASE / av_q2d(strct_push_file.m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->r_frame_rate);
+				pkt.pts = (double)(iFrameIndex * iDuration) / (double)(av_q2d(strctTimeBase) * AV_TIME_BASE);
+				pkt.dts = pkt.pts;
+				pkt.duration = (double)iDuration / (double)(av_q2d(strctTimeBase) * AV_TIME_BASE);
+			}
+
+			//计算延迟
+			if (pkt.stream_index == pThis->m_iVideoIndex){
+				AVRational strctTimeBase = strct_push_file.m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->time_base;
+				AVRational strctTimeBaseQ = { 1, AV_TIME_BASE };
+				int64_t iPts = av_rescale_q(pkt.dts, strctTimeBase, strctTimeBaseQ);
+				int64_t iNowTime = av_gettime() - iStartTime;
+				if (iPts > iNowTime){
+					av_usleep(iPts - iNowTime);
+				}
+				//TRACE("video-dts is [%d]\n", pkt.pts);
+			}
+			pInStream = strct_push_file.m_pFmtFileCtx->streams[pkt.stream_index];
+			pOutStream = pThis->m_pFmtRtmpCtx->streams[pkt.stream_index];
+
+			if (NULL == pInStream || NULL == pOutStream){
+				TRACE("NULL == pInStream || NULL == pOutStream!\n");
+				break;
+			}
+
+			//时间戳
+			pkt.pts = av_rescale_q_rnd(pkt.pts, pInStream->time_base, pOutStream->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+			pkt.dts = av_rescale_q_rnd(pkt.dts, pInStream->time_base, pOutStream->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+			pkt.duration = av_rescale_q(pkt.duration, pInStream->time_base, pOutStream->time_base);
+			pkt.pos = -1;
+
+			if (blAddPkt){
+				//循环之后需要加上之前的时间戳进行处理
+				if (pkt.stream_index == pThis->m_iVideoIndex){
+
+					//计算增量
+					int pts_duration = pkt.pts - last_video_pts_need_clear;
+					int dts_duration = pkt.dts - last_video_dts_need_clear;
+
+					//保存旧值
+					last_video_pts_need_clear = pkt.pts;
+					last_video_dts_need_clear = pkt.dts;
+
+					//计算新的时间戳
+					pkt.pts = pts_duration + last_video_pts;
+					pkt.dts = dts_duration + last_video_dts;
+				}
+				else{
+
+					//计算增量
+					int pts_duration = pkt.pts - last_audio_pts_need_clear;
+					int dts_duration = pkt.dts - last_audio_dts_need_clear;
+
+					//保存旧值
+					last_audio_pts_need_clear = pkt.pts;
+					last_audio_dts_need_clear = pkt.dts;
+
+					//计算新的时间戳
+					pkt.pts = pts_duration + last_audio_pts;
+					pkt.dts = dts_duration + last_audio_dts;
+				}
+			}
+
+			if (pkt.stream_index == pThis->m_iVideoIndex){
+				/*TRACE("video-pts is [%d]\n", pkt.pts);
+				TRACE("video-dts is [%d]\n", pkt.dts);
+				TRACE("video-duration is [%d]\n", pkt.duration);*/
+				last_video_pts = pkt.pts;
+				last_video_dts = pkt.dts;
+			}
+			else{
+				last_audio_pts = pkt.pts;
+				last_audio_dts = pkt.dts;
+			}
+
+			TRACE("-----iFrameIndex is [%d]----\n", iFrameIndex);
+			iRet = av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt);
+			if (iRet < 0){
+				av_free_packet(&pkt);
+				TRACE("av_interleaved_write_frame err!\n");
+				continue;
+			}
+			pThis->m_blPushSuccess = TRUE;
+
+			av_free_packet(&pkt);
+			iFrameIndex++;
+		}
+
+		//释放pFmtCtx
+		if (NULL != strct_push_file.m_pFmtFileCtx){
+			avformat_close_input(&strct_push_file.m_pFmtFileCtx);
+			avformat_free_context(strct_push_file.m_pFmtFileCtx);
+			strct_push_file.m_pFmtFileCtx = NULL;
+		}
 
 		//退出之后跳出循环
 		if (pStrctStreamInfo->m_iAbortRequest){
 			break;
 		}
-
-		//从输入文件中读数据
-		pkt.data = NULL;
-		pkt.size = 0;
-		if (av_read_frame(pThis->m_pFmtFileCtx, &pkt) < 0){
-			break;
-		}
-
-		if (pkt.pts == AV_NOPTS_VALUE){
-			AVRational strctTimeBase = pThis->m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->time_base;
-			int64_t iDuration = (double)AV_TIME_BASE / av_q2d(pThis->m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->r_frame_rate);
-			pkt.pts = (double)(iFrameIndex * iDuration) / (double)(av_q2d(strctTimeBase) * AV_TIME_BASE);
-			pkt.dts = pkt.pts;
-			pkt.duration = (double)iDuration / (double)(av_q2d(strctTimeBase) * AV_TIME_BASE);
-		}
-
-		//计算延迟
-		if (pkt.stream_index == pThis->m_iVideoIndex){
-			AVRational strctTimeBase = pThis->m_pFmtFileCtx->streams[pThis->m_iVideoIndex]->time_base;
-			AVRational strctTimeBaseQ = { 1, AV_TIME_BASE };
-			int64_t iPts = av_rescale_q(pkt.dts, strctTimeBase, strctTimeBaseQ);
-			int64_t iNowTime = av_gettime() - iStartTime;
-			if (iPts > iNowTime){
-				av_usleep(iPts - iNowTime);
-			}
-		}
-		pInStream = pThis->m_pFmtFileCtx->streams[pkt.stream_index];
-		pOutStream = pThis->m_pFmtRtmpCtx->streams[pkt.stream_index];
-
-		if (NULL == pInStream || NULL == pOutStream){
-			TRACE("NULL == pInStream || NULL == pOutStream!\n");
-			break;
-		}
-
-		//时间戳
-		pkt.pts = av_rescale_q_rnd(pkt.pts, pInStream->time_base, pOutStream->time_base, (AVRounding)(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
-		pkt.dts = av_rescale_q_rnd(pkt.dts, pInStream->time_base, pOutStream->time_base, (AVRounding)(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
-		pkt.duration = av_rescale_q(pkt.duration, pInStream->time_base, pOutStream->time_base);
-		pkt.pos = -1;
-
-		if (av_interleaved_write_frame(pThis->m_pFmtRtmpCtx, &pkt) < 0){
-			TRACE("av_interleaved_write_frame err!\n");
-			break;
-		}
-
-		av_free_packet(&pkt);
-		iFrameIndex ++;
-		TRACE("-----------iFrameIndex = [%d]-----------------\n", iFrameIndex);
 	}
 
 	av_write_trailer(pThis->m_pFmtRtmpCtx);
 	iRet = 0;
 END:
+	if (iRet != 0){
+		pThis->m_blPushSuccess = FALSE;
+	}
 	return iRet;
 }
 
@@ -611,13 +724,11 @@ void CLS_DlgStreamPusher::OnBnClickedChkSrcType()
 	//选择推送源类型
 	if (m_chkSrcType.GetCheck()){
 		m_blUrl = TRUE;
-		m_edtLocalFilePath.EnableWindow(FALSE);
-		m_btnOpenLocalFile.EnableWindow(FALSE);
+		ShowControls(TRUE);
 	}
 	else{
 		m_blUrl = FALSE;
-		m_edtLocalFilePath.EnableWindow(TRUE);
-		m_btnOpenLocalFile.EnableWindow(TRUE);
+		ShowControls(FALSE);
 	}
 }
 
@@ -628,17 +739,19 @@ void CLS_DlgStreamPusher::OnBnClickedBtnOpenLocalFile()
 	CString szFilter = _T("All Files (*.*)|*.*|avi Files (*.avi)|*.avi|rmvb Files (*.rmvb)|*.rmvb|3gp Files (*.3gp)|*.3gp|mp3 Files (*.mp3)|*.mp3|mp4 Files (*.mp4)|*.mp4|mpeg Files (*.ts)|*.ts|flv Files (*.flv)|*.flv|mov Files (*.mov)|*.mov||");
 	CFileDialog dlg(TRUE, NULL, NULL, OFN_PATHMUSTEXIST | OFN_HIDEREADONLY, szFilter, NULL);
 	if (IDOK == dlg.DoModal()){
-		m_cstrFilePath = dlg.GetPathName();
-		m_edtLocalFilePath.SetWindowText(m_cstrFilePath);
+		CString cstrFilePath = dlg.GetPathName();
+
+		m_lstLocalFiles.DeleteAllItems();
+		ClearFileMem();
+
+		if (InsertFileList(cstrFilePath) < 0){
+			TRACE("InsertFileList err filepath is [%s]", cstrFilePath);
+			return;
+		}
 	}
 	else{
 		MessageBox(_T("获取文件名称失败 请重新加载"), NULL, MB_OK);
 		m_cstrFilePath = "";
-		return;
-	}
-
-	if (OpenFile() < 0){
-		TRACE("文件打开失败！\n");
 		return;
 	}
 }
@@ -735,20 +848,34 @@ static int audio_refresh_thread(void *opaque)
 
 void CLS_DlgStreamPusher::InitDlgItem()
 {
-	//进行界面信息的初始化操作
+	//推流线路
+	m_cboPushAddr.InsertString(0, "hp");
+	m_cboPushAddr.InsertString(1, "qn");
+	m_cboPushAddr.SetCurSel(1);
+	OnCbnSelchangeCboPushAddr();
+
 	//默认是网络流推送
 	m_chkSrcType.SetCheck(1);
-
 	m_blUrl = TRUE;
-	m_edtLocalFilePath.EnableWindow(FALSE);
-	m_btnOpenLocalFile.EnableWindow(FALSE);
 	m_chkWriteFile.SetCheck(TRUE);
 	m_chkShowVideo.SetCheck(TRUE);
+	ShowControls(TRUE);
 
-	if (NULL == m_bkBrush)
-	{
+	//初始化list
+	m_lstLocalFiles.SetExtendedStyle(LVS_EX_GRIDLINES | LVS_EX_FULLROWSELECT);
+	m_lstLocalFiles.InsertColumn(0, "文件名称", LVCFMT_CENTER, 1000);
+
+	//初始化背景刷
+	if (NULL == m_bkBrush){
 		m_bkBrush = CreateSolidBrush(COLOR_BLACK);
 	}
+
+	//初始化右键菜单
+	m_Rmenu.CreatePopupMenu();
+	m_Rmenu.InsertMenu(0, MF_BYPOSITION, IDM_PBK_MNU_DELETE, "删除");
+	m_Rmenu.InsertMenu(1, MF_BYPOSITION, IDM_PBK_MNU_CLEAR, "清空");
+	m_Rmenu.InsertMenu(2, MF_BYPOSITION, IDM_PBK_MNU_SINGLE, "单文件循环推送");
+	m_Rmenu.InsertMenu(3, MF_BYPOSITION, IDM_PBK_MNU_CIRCLE, "所有文件循环推送");
 
 	//初始化网络库
 	av_register_all();
@@ -764,7 +891,6 @@ void CLS_DlgStreamPusher::InitDlgItem()
 	//获取设备信息
 	GetDevice();
 
-	m_edtPusherAddr.SetWindowText("rtmp://dqd-dl-pub.arenacdn.com/prod/fz03hK0M8lFhEADp?pass=5c1bda46fb43ff291e06cf9e9788b1bc");//rtmp://xxg2c3.publish.z1.pili.qiniup.com/dongqiudi/live3?key=bc21bda2fe27c512
 	m_edtFrameRate.SetWindowText("25");
 
 	return;
@@ -801,6 +927,7 @@ void CLS_DlgStreamPusher::UnInitInfo()
 	//释放相关资源
 	m_blPushStream = FALSE;
 	m_blPreview = FALSE;
+	m_blPushSuccess = FALSE;
 
 	if (NULL != m_pStreamInfo){
 		m_pStreamInfo->m_iAbortRequest = 1;
@@ -901,11 +1028,7 @@ void CLS_DlgStreamPusher::UnInitInfo()
 		m_pFmtAudioCtx = NULL;
 	}
 
-	if (NULL != m_pFmtFileCtx){
-		avformat_close_input(&m_pFmtFileCtx);
-		avformat_free_context(m_pFmtFileCtx);
-		m_pFmtFileCtx = NULL;
-	}
+	ClearFileMem();
 	return;
 }
 
@@ -942,7 +1065,7 @@ int CLS_DlgStreamPusher::GetDeviceInfo(int _iDeviceType)
 		}
 		if (hr == S_FALSE)
 		{
-			TRACE("没有找到合适的音视频设备！");
+			TRACE("没有找到合适的音视频设备！\n");
 			hr = VFW_E_NOT_FOUND;
 			return hr;
 		}
@@ -1636,28 +1759,27 @@ int CLS_DlgStreamPusher::OpenCamera()
 	return iRet;
 }
 
-int CLS_DlgStreamPusher::OpenFile()
+AVFormatContext* CLS_DlgStreamPusher::OpenFile(CString _cstrFilePath)
 {
-	int iRet = -1;
-	if (m_cstrFilePath == ""){
+	AVFormatContext* pFileFmtCtx = NULL;
+	if (_cstrFilePath == ""){
 		MessageBox("打开文件有误！\n");
 		goto END;
 	}
 
-	m_pFmtFileCtx = avformat_alloc_context();
-	if (avformat_open_input(&m_pFmtFileCtx, m_cstrFilePath, 0, 0) < 0){
-		TRACE("avformat_open_input file err ! (%s)", m_cstrFilePath.GetBuffer());
+	pFileFmtCtx = avformat_alloc_context();
+	if (avformat_open_input(&pFileFmtCtx, _cstrFilePath, 0, 0) < 0){
+		TRACE("avformat_open_input file err ! (%s)", _cstrFilePath.GetBuffer());
 		goto END;
 	}
 
-	if (avformat_find_stream_info(m_pFmtFileCtx, 0) < 0 ){
+	if (avformat_find_stream_info(pFileFmtCtx, 0) < 0){
 		TRACE("avformat_find_stream_info err!\n");
 		goto END;
 	}
 
-	iRet = 0;
 END:
-	return iRet;
+	return pFileFmtCtx;
 }
 
 int CLS_DlgStreamPusher::OpenAduio()
@@ -1728,7 +1850,6 @@ int CLS_DlgStreamPusher::OpenRtmpAddr()
 	AVOutputFormat		*pStreamOutfmt = NULL;
 
 	//进行推流操作
-	m_edtPusherAddr.GetWindowText(m_cstrPushAddr);
 	if (m_cstrPushAddr == ""){
 		MessageBox(_T("请输入正确的推流地址！\n"));
 		return iRet;
@@ -1872,7 +1993,7 @@ END:
 int CLS_DlgStreamPusher::OpenRtmpFile()
 {
 	int iRet = -1;
-	if (NULL == m_pFmtFileCtx){
+	if (NULL == m_strctPushFile.m_pFmtFileCtx){
 		TRACE("NULL == m_pFmtFileCtx");
 		goto END;
 	}
@@ -1881,10 +2002,10 @@ int CLS_DlgStreamPusher::OpenRtmpFile()
 		goto END;
 	}
 
-	for (int i = 0; i < m_pFmtFileCtx->nb_streams; i++){
+	for (int i = 0; i < m_strctPushFile.m_pFmtFileCtx->nb_streams; i++){
 		AVStream* pInStream = NULL;
-		if (m_pFmtFileCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO){
-			pInStream = m_pFmtFileCtx->streams[i];
+		if (m_strctPushFile.m_pFmtFileCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO){
+			pInStream = m_strctPushFile.m_pFmtFileCtx->streams[i];
 			if (NULL == pInStream){
 				TRACE("NULL == pInStream\n");
 				goto END;
@@ -1895,8 +2016,6 @@ int CLS_DlgStreamPusher::OpenRtmpFile()
 				goto END;
 			}
 			m_iVideoIndex = i;
-			//m_pStreamInfo->m_pVideoStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_H264);
-
 			//拷贝视频编码器信息
 			if (avcodec_copy_context(m_pStreamInfo->m_pVideoStream->codec, pInStream->codec) < 0){
 				TRACE("avcodec_copy_context video err!\n");
@@ -1908,8 +2027,8 @@ int CLS_DlgStreamPusher::OpenRtmpFile()
 				m_pStreamInfo->m_pVideoStream->codec->flags |= CODEC_FLAG_GLOBAL_HEADER;
 			}
 		}
-		else if (m_pFmtFileCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO){
-			pInStream = m_pFmtFileCtx->streams[i];
+		else if (m_strctPushFile.m_pFmtFileCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO){
+			pInStream = m_strctPushFile.m_pFmtFileCtx->streams[i];
 			if (NULL == pInStream){
 				TRACE("NULL == pInStream\n");
 				goto END;
@@ -1920,8 +2039,6 @@ int CLS_DlgStreamPusher::OpenRtmpFile()
 				goto END;
 			}
 			m_iAudioIndex = i;
-			//m_pStreamInfo->m_pAudioStream->codec->codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
-
 			//拷贝音频编码器信息
 			if (avcodec_copy_context(m_pStreamInfo->m_pAudioStream->codec, pInStream->codec) < 0){
 				TRACE("avcodec_copy_context audio err!\n");
@@ -2067,4 +2184,238 @@ int CLS_DlgStreamPusher::CreateVideoWindow()
 	m_blCreateVideoWin = TRUE;
 	iRet = 0;
 	return iRet;
+}
+
+void CLS_DlgStreamPusher::OnBnClickedBtnOpenLocalFiles()
+{
+	m_lstLocalFiles.DeleteAllItems();
+	ClearFileMem();
+
+	//获取一个文件夹下的所有文件信息
+	CString cstrFilePath = "";
+	TCHAR cBuffer[MAX_PATH];
+	BROWSEINFO bi;
+	bi.hwndOwner = NULL;
+	bi.pidlRoot = NULL;
+	bi.pszDisplayName = cBuffer;
+	bi.lpszTitle = "选择文件夹";
+	bi.ulFlags = BIF_EDITBOX;
+	bi.lpfn = NULL;
+	bi.iImage = NULL;
+	LPITEMIDLIST plDList = SHBrowseForFolder(&bi);
+	if (NULL == plDList){
+		TRACE("NULL == plDList\n");
+		return;
+	}
+	SHGetPathFromIDList(plDList, cBuffer);
+	cstrFilePath = cBuffer;
+
+	GetFiles(cstrFilePath);
+}
+
+void CLS_DlgStreamPusher::GetFiles(CString _cstrFilePath)
+{
+	CFileFind fileFinder;
+	//判断文件路径是否存在
+	_cstrFilePath += _T("//*.*");
+
+	BOOL blFinish = fileFinder.FindFile(_cstrFilePath);
+	while (blFinish){
+		blFinish = fileFinder.FindNextFile();
+		if (fileFinder.IsDirectory() && !fileFinder.GetFilePath()){
+			//目录进行递归查找
+			GetFiles(fileFinder.GetFilePath());
+		}
+		else{
+			CString cstrFileName = fileFinder.GetFileName();
+			int iDotPos = cstrFileName.ReverseFind('.');
+			CString cstrFileExt = cstrFileName.Right(cstrFileName.GetLength() - iDotPos - 1);
+			if (cstrFileExt == _T("mp4") || cstrFileExt == _T("mkv") || cstrFileExt == _T("avi")
+				|| cstrFileExt == _T("wma") || cstrFileExt == _T("rmvb") || cstrFileExt == _T("rm")
+				|| cstrFileExt == _T("3gp") || cstrFileExt == _T("mid") || cstrFileExt == _T("flv")
+				|| cstrFileExt == _T("flash") || cstrFileExt == _T("ts") || cstrFileExt == _T("mov")){
+				
+				//将找到的文件插入到列表
+				if (InsertFileList(fileFinder.GetFilePath()) < 0){
+					TRACE("InsertFileList err filepath is [%s]", fileFinder.GetFilePath());
+					continue;
+				}
+			}
+		}
+	}
+
+	fileFinder.Close();
+}
+
+void CLS_DlgStreamPusher::ShowControls(BOOL _blShow)
+{
+	m_btnOpenLocalFile.ShowWindow(!_blShow);
+	m_btnOpenFiles.ShowWindow(!_blShow);
+	m_lstLocalFiles.ShowWindow(!_blShow);
+
+	GetDlgItem(IDC_STC_DEVICE_VIDEO)->ShowWindow(_blShow);
+	GetDlgItem(IDC_STC_DEVICE_AUDIO)->ShowWindow(_blShow);
+	GetDlgItem(IDC_STC_RESOLUTION)->ShowWindow(_blShow);
+	GetDlgItem(IDC_STC_FRAME)->ShowWindow(_blShow);
+	GetDlgItem(IDC_BTN_REFRESHVIDEO)->ShowWindow(_blShow);
+	GetDlgItem(IDC_CHK_SHOW_VIDEO)->ShowWindow(_blShow);
+	GetDlgItem(IDC_STC_PREVIEW)->ShowWindow(_blShow);
+	GetDlgItem(IDC_BTN_PREVIEW)->ShowWindow(_blShow);
+	m_cboDeviceAudio.ShowWindow(_blShow);
+	m_cboDeviceVideo.ShowWindow(_blShow);
+	m_cboResolution.ShowWindow(_blShow);
+	m_edtFrameRate.ShowWindow(_blShow);
+}
+
+
+void CLS_DlgStreamPusher::OnCbnSelchangeCboPushAddr()
+{
+	//当前正在推送进行停止操作提示
+	if (m_blPushSuccess){
+		MessageBox(_T("请先停止当前推流操作！\n"));
+		return;
+	}
+
+	int iSelIndex = m_cboPushAddr.GetCurSel();
+	if (iSelIndex >= PUSH_ADDR_NUM){
+		MessageBox(_T("选择正确的推送地址！\n"));
+		return;
+	}
+
+	m_cstrPushAddr = strPushAddr[iSelIndex].c_str();
+}
+
+BOOL CLS_DlgStreamPusher::OnCommand(WPARAM wParam, LPARAM lParam)
+{
+	int iMenuId = LOWORD(wParam);
+	switch (iMenuId)
+	{
+	case IDM_PBK_MNU_DELETE:
+		OnDeleteItem();
+		break;
+	case IDM_PBK_MNU_CLEAR:
+		OnClearItems();
+		break;
+	case IDM_PBK_MNU_SINGLE:
+		m_blPushSingle = TRUE;
+		break;
+	case IDM_PBK_MNU_CIRCLE:
+		m_blPushSingle = FALSE;
+		break;
+	default:
+		break;
+	}
+	return CDialog::OnCommand(wParam, lParam);
+}
+
+void CLS_DlgStreamPusher::OnDeleteItem()
+{
+	//删除所选中的文件
+	if (m_iLstSelIndex < 0){
+		TRACE("m_iLstSelIndex < 0\n");
+		return;
+	}
+
+	//删除当前文件申请的内存
+	map<int, STRCT_PUSH_FILE>::iterator iter = m_mapPushFile.begin();
+	for (; iter != m_mapPushFile.end(); iter++){
+		if (m_iLstSelIndex == iter->first){
+			STRCT_PUSH_FILE strct_push_file = iter->second;
+
+			if (NULL != strct_push_file.m_pFmtFileCtx){
+				avformat_close_input(&strct_push_file.m_pFmtFileCtx);
+				avformat_free_context(strct_push_file.m_pFmtFileCtx);
+				strct_push_file.m_pFmtFileCtx = NULL;
+			}
+
+			m_mapPushFile.erase(iter);
+			break;
+		}
+	}
+
+	m_lstLocalFiles.DeleteItem(m_iLstSelIndex);
+}
+
+void CLS_DlgStreamPusher::OnClearItems()
+{
+	//清空整个文件列表
+	m_lstLocalFiles.DeleteAllItems();
+	ClearFileMem();
+}
+
+int CLS_DlgStreamPusher::InsertFileList(CString _cstrFilePath)
+{
+	int iRet = -1;
+	STRCT_PUSH_FILE strct_push_file;
+
+	//将文件名称插入到列表中
+	int iItemCount = m_lstLocalFiles.GetItemCount();
+	m_lstLocalFiles.InsertItem(iItemCount, _cstrFilePath);
+
+	AVFormatContext* pFileFmtCtx = OpenFile(_cstrFilePath);
+	if (NULL == pFileFmtCtx){
+		TRACE("NULL == pFileFmtCtx!\n");
+		goto END;
+	}
+
+	strct_push_file.m_cstrFilePath = _cstrFilePath;
+	strct_push_file.m_pFmtFileCtx = pFileFmtCtx;
+	m_mapPushFile.insert(map<int, STRCT_PUSH_FILE>::value_type(iItemCount, strct_push_file));
+	
+	iRet = 0;
+END:
+	return iRet;
+}
+
+void CLS_DlgStreamPusher::ClearFileMem()
+{
+	map<int, STRCT_PUSH_FILE>::iterator iter = m_mapPushFile.begin();
+	for (; iter != m_mapPushFile.end(); iter++){
+		STRCT_PUSH_FILE strct_push_file = iter->second;
+
+		if (NULL != strct_push_file.m_pFmtFileCtx){
+			avformat_close_input(&strct_push_file.m_pFmtFileCtx);
+			avformat_free_context(strct_push_file.m_pFmtFileCtx);
+			strct_push_file.m_pFmtFileCtx = NULL;
+		}
+	}
+	m_mapPushFile.clear();
+}
+
+void CLS_DlgStreamPusher::OnNMRClickListLocalFiles(NMHDR *pNMHDR, LRESULT *pResult)
+{
+	LPNMITEMACTIVATE pNMItemActivate = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	CPoint ptCur;
+	GetCursorPos(&ptCur);
+
+	NM_LISTVIEW *pNmListView = (NM_LISTVIEW*)pNMHDR;
+	if (-1 == pNmListView->iItem){
+		TRACE("-1 == pNmListView->iItem\n");
+		return;
+	}
+
+	m_iLstSelIndex = pNmListView->iItem;
+	m_Rmenu.TrackPopupMenu(TPM_RIGHTBUTTON | TPM_LEFTALIGN, ptCur.x, ptCur.y, this);
+	*pResult = 0;
+}
+
+void CLS_DlgStreamPusher::OnNMDblclkListLocalFiles(NMHDR *pNMHDR, LRESULT *pResult)
+{
+	LPNMITEMACTIVATE pNMItemActivate = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	NM_LISTVIEW *pNmListView = (NM_LISTVIEW*)pNMHDR;
+	if (-1 == pNmListView->iItem){
+		TRACE("-1 == pNmListView->iItem\n");
+		return;
+	}
+
+	m_iLstSelIndex = pNmListView->iItem;
+	if (m_iLstSelIndex >= m_mapPushFile.size()){
+		TRACE("m_iLstSelIndex >= m_mapPushFile.size() index is [%d]", m_iLstSelIndex);
+		return;
+	}
+
+	memcpy(&m_strctPushFile, &m_mapPushFile[m_iLstSelIndex], sizeof(STRCT_PUSH_FILE));
+
+	m_stcSelFile.SetWindowText(m_strctPushFile.m_cstrFilePath);
+	*pResult = 0;
 }
