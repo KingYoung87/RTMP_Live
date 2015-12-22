@@ -114,7 +114,6 @@ typedef struct stream_info{
 	AVFifoBuffer			*m_pVideoFifo;
 	SDL_mutex			*m_pVideoMutex;
 	AVStream				*m_pVideoStream;			//视频流
-	uint8_t				*m_pVideoDecPicSize;		//视频解码Pic大小
 	uint8_t				*m_pPushPicSize;			//推送Pic大小
 	SwsContext			*m_pVideoSwsCtx;			//视频变化ctx
 	
@@ -123,7 +122,7 @@ typedef struct stream_info{
 
 typedef struct PUSH_FILE_STREAM{
 	CString			m_cstrFilePath;	//文件名称
-	AVFormatContext *m_pFmtFileCtx;	//文件format
+	AVFormatContext *m_pFmtFileCtx;	//文件流上下文
 }STRCT_PUSH_FILE;
 
 // CLS_DlgStreamPusher 对话框
@@ -147,6 +146,7 @@ protected:
 	// 生成的消息映射函数
 	virtual BOOL OnInitDialog();
 	afx_msg void OnPaint();
+	afx_msg void OnDestroy();
 	afx_msg HCURSOR OnQueryDragIcon();
 	DECLARE_MESSAGE_MAP()
 public:
@@ -244,13 +244,6 @@ private:
 	return: 音视频信息结构体指针
 	**********************/
 	struct_stream_info* GetStreamStrcInfo();
-
-	/**********************
-	method: 处理显示区域
-	param : 
-	return: 
-	**********************/
-	void	 FillDisplayRect();
 
 	/**********************
 	method: 窗体刷新
@@ -370,6 +363,14 @@ private:
 	int CreateVideoWindow();
 
 	/**********************
+	method: 初始化视频播放窗口
+	param:
+	return: <0：初始化失败
+			=0：初始化成功
+	**********************/
+	int InitVideoWindow();
+
+	/**********************
 	method: 获取当前文件夹下的所有文件
 	param:
 	return: 
@@ -419,6 +420,8 @@ public:
 	**********************/
 	AVFormatContext* OpenFile(CString _cstrFilePath);
 
+	int ScaleImg(AVCodecContext *pCodecCtx, AVFrame *src_picture, AVFrame *dst_picture, int nDstH, int nDstW);
+
 	HBRUSH									m_bkBrush;		//背景刷
 	struct_stream_info*						m_pStreamInfo;	//音视频全局结构体
 	BOOL										m_blVideoShow;	//是否显示视频
@@ -448,6 +451,8 @@ public:
 	int										m_iDstVideoWidth;//输出视频宽
 	int										m_iFrameRate;	//帧率
 	int										m_iLstSelIndex;	//列表选择项
+	int										m_iWindowWidth;	//背景板的宽
+	int										m_iWiddowHeight;	//背景板的高
 	SDL_Thread							   *m_pPushStreamThrid;//推流线程
 	SDL_Thread							   *m_pPushFileThrid;//推文件线程
 	map<int, std::vector<std::string>>		m_mapDeviceInfo;	//设备信息容器

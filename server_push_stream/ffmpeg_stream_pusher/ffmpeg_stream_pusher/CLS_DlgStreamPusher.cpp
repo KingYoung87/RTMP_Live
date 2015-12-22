@@ -58,6 +58,8 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_iFrameRate = -1;
 	m_iVideoIndex = -1;
 	m_iLstSelIndex = -1;
+	m_iWindowWidth = -1;
+	m_iWiddowHeight = -1;
 	m_iVideoOutIndex = -1;
 	m_iAudioOutIndex = -1;
 
@@ -148,17 +150,19 @@ int video_thr(LPVOID lpParam)
 
 	TRACE("Rect width is[%d] and height is[%d]\n", sdlRect.w, sdlRect.h);
 
-	AVFrame	* pFrame;
+	AVFrame	*pFrame;
 	pFrame = avcodec_alloc_frame();
 	AVFrame *picture = avcodec_alloc_frame();
 	int size = avpicture_get_size(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
 		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
-	strct_streaminfo->m_pVideoDecPicSize = (uint8_t*)av_malloc(size);
 
-	avpicture_fill((AVPicture *)picture, strct_streaminfo->m_pVideoDecPicSize,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
+	//申请picture
+	if (avpicture_alloc((AVPicture*)picture, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
+		pThis->m_iSrcVideoWidth * 2,
+		pThis->m_iSrcVideoHeight * 2) < 0){
+		TRACE("avpicture_alloc < 0");
+		return iRet;
+	}
 
 	int height = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height;
 	int width = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width;
@@ -167,8 +171,8 @@ int video_thr(LPVOID lpParam)
 	SDL_Rect sdlSrcRect;
 	sdlSrcRect.x = 0;
 	sdlSrcRect.y = 0;
-	sdlSrcRect.w = height;
-	sdlSrcRect.h = width;
+	sdlSrcRect.w = pThis->m_iSrcVideoHeight;
+	sdlSrcRect.h = pThis->m_iSrcVideoWidth;
 
 	//从摄像头获取数据
 	while (1){
@@ -204,7 +208,7 @@ int video_thr(LPVOID lpParam)
 				//显示视频
 				SDL_UpdateYUVTexture(strct_streaminfo->m_pSdlTexture, NULL, picture->data[0], picture->linesize[0], picture->data[1], picture->linesize[1], picture->data[2], picture->linesize[2]);
 				SDL_RenderClear(strct_streaminfo->m_pSdlRender);
-				SDL_RenderCopy(strct_streaminfo->m_pSdlRender, strct_streaminfo->m_pSdlTexture, NULL, NULL);
+				SDL_RenderCopy(strct_streaminfo->m_pSdlRender, strct_streaminfo->m_pSdlTexture, &sdlSrcRect, &sdlRect);
 				SDL_RenderPresent(strct_streaminfo->m_pSdlRender);
 			}
 
@@ -986,10 +990,6 @@ void CLS_DlgStreamPusher::UnInitInfo()
 			av_freep(&m_pStreamInfo->m_pPushPicSize);
 		}
 
-		if (m_pStreamInfo->m_pVideoDecPicSize){
-			av_freep(&m_pStreamInfo->m_pVideoDecPicSize);
-		}
-
 		if (m_pStreamInfo->m_pVideoStream){
 			if (m_pStreamInfo->m_pVideoStream->codec){
 				avcodec_close(m_pStreamInfo->m_pVideoStream->codec);
@@ -1029,6 +1029,13 @@ void CLS_DlgStreamPusher::UnInitInfo()
 	}
 
 	ClearFileMem();
+
+	/*if (NULL != m_pFmtRtmpCtx){
+		avio_close(m_pFmtRtmpCtx->pb);
+		avformat_close_input(&m_pFmtAudioCtx);
+		avformat_free_context(m_pFmtRtmpCtx);
+		m_pFmtRtmpCtx = NULL;
+	}*/
 	return;
 }
 
@@ -1245,29 +1252,6 @@ char* CLS_DlgStreamPusher::GetDeviceName(int _iDeviceType)
 struct_stream_info* CLS_DlgStreamPusher::GetStreamStrcInfo()
 {
 	return m_pStreamInfo;
-}
-
-void CLS_DlgStreamPusher::FillDisplayRect()
-{
-	struct_stream_info* streamInfo = GetStreamStrcInfo();
-	if (NULL == streamInfo){
-		TRACE("NULL == streamInfo");
-		return;
-	}
-
-	streamInfo->m_pScreenSurface = SDL_GetWindowSurface(streamInfo->m_pShowScreen);
-	if (NULL == streamInfo->m_pScreenSurface){
-		TRACE("NULL == streamInfo->m_pScreenSurface");
-		return;
-	}
-
-	//背景色
-	int bgcolor = SDL_MapRGB(streamInfo->m_pScreenSurface->format, 0x00, 0x00, 0x00);
-	FillRec(streamInfo->m_pScreenSurface, m_pStreamInfo->m_xLeft, m_pStreamInfo->m_yTop, m_pStreamInfo->m_width, m_pStreamInfo->m_height, bgcolor);
-
-	if (SDL_UpdateWindowSurface(streamInfo->m_pShowScreen) != 0){
-		TRACE("SDL_UpdateWindowSurface ERR");
-	}
 }
 
 void CLS_DlgStreamPusher::EventLoop(struct_stream_info *_pstrct_streaminfo)
@@ -1729,20 +1713,8 @@ int CLS_DlgStreamPusher::OpenCamera()
 	m_iSrcVideoHeight = m_pCodecVideoCtx->height;
 	m_iSrcVideoWidth = m_pCodecVideoCtx->width;
 
-
-	//获取视频宽高之后创建纹理
-	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_iSrcVideoWidth, m_iSrcVideoHeight);
-	if (NULL == m_pStreamInfo->m_pSdlTexture){
-		MessageBox(_T("初始化视频窗口失败！\n"));
-		return iRet;
-	}
-
-	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iSrcVideoWidth, m_iSrcVideoHeight, m_pCodecVideoCtx->pix_fmt,
-		m_iDstVideoWidth, m_iDstVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
-	if (NULL == m_pStreamInfo->m_pVideoSwsCtx){
-		TRACE("NULL == strct_streaminfo->m_pVideoSwsCtx\n");
-		return iRet;
-	}
+	//初始化视频预览窗口
+	InitVideoWindow();
 
 	//需要将采集信息写文件，打开解码器
 	pCodec = avcodec_find_decoder(m_pCodecVideoCtx->codec_id);
@@ -2152,6 +2124,7 @@ int CLS_DlgStreamPusher::CreateVideoWindow()
 	}
 
 	int iRet = -1;
+
 	//将CSTATIC控件和sdl显示窗口关联 
 	HWND hWnd = this->GetDlgItem(IDC_STC_PREVIEW)->GetSafeHwnd();
 	if (hWnd != NULL){
@@ -2161,27 +2134,9 @@ int CLS_DlgStreamPusher::CreateVideoWindow()
 				MessageBox(_T("初始化视频窗口失败！\n"));
 				return iRet;
 			}
-			RECT rectDisPlay;
-			this->GetDlgItem(IDC_STC_PREVIEW)->GetWindowRect(&rectDisPlay);
-			m_pStreamInfo->m_xLeft = rectDisPlay.left;
-			m_pStreamInfo->m_yTop = rectDisPlay.top;
-			m_pStreamInfo->m_width = rectDisPlay.right - rectDisPlay.left;
-			m_pStreamInfo->m_height = rectDisPlay.bottom - rectDisPlay.top;
 		}
 	}
 
-	if (NULL == m_pStreamInfo->m_pShowScreen){
-		MessageBox(_T("初始化视频窗口失败！\n"));
-		return iRet;
-	}
-
-	m_pStreamInfo->m_pSdlRender = SDL_CreateRenderer(m_pStreamInfo->m_pShowScreen, -1, 0);
-	if (NULL == m_pStreamInfo->m_pSdlRender){
-		MessageBox(_T("初始化视频窗口失败！\n"));
-		return iRet;
-	}
-
-	m_blCreateVideoWin = TRUE;
 	iRet = 0;
 	return iRet;
 }
@@ -2252,6 +2207,8 @@ void CLS_DlgStreamPusher::ShowControls(BOOL _blShow)
 	m_btnOpenLocalFile.ShowWindow(!_blShow);
 	m_btnOpenFiles.ShowWindow(!_blShow);
 	m_lstLocalFiles.ShowWindow(!_blShow);
+	m_stcSelFile.ShowWindow(!_blShow);
+	GetDlgItem(IDC_STC_SEL_FILE)->ShowWindow(!_blShow);
 
 	GetDlgItem(IDC_STC_DEVICE_VIDEO)->ShowWindow(_blShow);
 	GetDlgItem(IDC_STC_DEVICE_AUDIO)->ShowWindow(_blShow);
@@ -2301,6 +2258,9 @@ BOOL CLS_DlgStreamPusher::OnCommand(WPARAM wParam, LPARAM lParam)
 		break;
 	case IDM_PBK_MNU_CIRCLE:
 		m_blPushSingle = FALSE;
+		break;
+	case IDC_CLOSE:
+		OnDestroy();
 		break;
 	default:
 		break;
@@ -2418,4 +2378,82 @@ void CLS_DlgStreamPusher::OnNMDblclkListLocalFiles(NMHDR *pNMHDR, LRESULT *pResu
 
 	m_stcSelFile.SetWindowText(m_strctPushFile.m_cstrFilePath);
 	*pResult = 0;
+}
+
+int CLS_DlgStreamPusher::InitVideoWindow()
+{
+	int iRet = -1;
+	RECT rectDisPlay;
+
+	if (m_blCreateVideoWin){
+		goto END;
+	}
+	this->GetDlgItem(IDC_STC_PREVIEW)->GetWindowRect(&rectDisPlay);
+	m_pStreamInfo->m_xLeft = rectDisPlay.left;
+	m_pStreamInfo->m_yTop = rectDisPlay.top;
+	m_pStreamInfo->m_width = m_iDstVideoWidth;
+	m_pStreamInfo->m_height = m_iDstVideoHeight;
+
+	m_iWindowWidth = rectDisPlay.right - rectDisPlay.left;
+	m_iWiddowHeight = rectDisPlay.bottom - rectDisPlay.top;
+
+	if (NULL == m_pStreamInfo->m_pShowScreen){
+		MessageBox(_T("初始化视频窗口失败！\n"));
+		goto END;
+	}
+
+	m_pStreamInfo->m_pSdlRender = SDL_CreateRenderer(m_pStreamInfo->m_pShowScreen, -1, 0);
+	if (NULL == m_pStreamInfo->m_pSdlRender){
+		MessageBox(_T("初始化视频窗口失败！\n"));
+		goto END;
+	}
+
+	m_blCreateVideoWin = TRUE;
+
+	//获取视频宽高之后创建纹理
+	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_iDstVideoWidth, m_iDstVideoHeight);
+	if (NULL == m_pStreamInfo->m_pSdlTexture){
+		MessageBox(_T("初始化视频窗口失败！\n"));
+		goto END;
+	}
+
+	TRACE("m_iSrcVideoWidth is [%d] m_iSrcVideoHeight is [%d] m_iDstVideoWidth is [%d] m_iDstVideoHeight is [%d]\n", m_iSrcVideoWidth, m_iSrcVideoHeight, m_iDstVideoWidth, m_iDstVideoHeight);
+	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iSrcVideoWidth, m_iSrcVideoHeight, m_pCodecVideoCtx->pix_fmt,
+		m_iDstVideoWidth, m_iDstVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
+	if (NULL == m_pStreamInfo->m_pVideoSwsCtx){
+		TRACE("NULL == strct_streaminfo->m_pVideoSwsCtx\n");
+		goto END;
+	}
+
+	iRet = 0;
+END:
+	return iRet;
+}
+
+void CLS_DlgStreamPusher::OnDestroy()
+{
+	CDialog::OnDestroy();
+}
+
+int CLS_DlgStreamPusher::ScaleImg(AVCodecContext *pCodecCtx, AVFrame *src_picture, AVFrame *dst_picture, int nDstH, int nDstW)
+{
+	int i;
+	int nSrcStride[3];
+	int nDstStride[3];
+	int nSrcH = pCodecCtx->height;
+	int nSrcW = pCodecCtx->width;
+
+	uint8_t *pSrcBuff[3] = { src_picture->data[0], src_picture->data[1], src_picture->data[2] };
+
+	nSrcStride[0] = nSrcW;
+	nSrcStride[1] = nSrcW / 2;
+	nSrcStride[2] = nSrcW / 2;
+
+	dst_picture->linesize[0] = nDstW;
+	dst_picture->linesize[1] = nDstW / 2;
+	dst_picture->linesize[2] = nDstW / 2;
+
+	sws_scale(m_pStreamInfo->m_pVideoSwsCtx, src_picture->data, src_picture->linesize, 0, pCodecCtx->height, dst_picture->data, dst_picture->linesize);
+
+	return 1;
 }
