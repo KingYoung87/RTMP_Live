@@ -428,7 +428,8 @@ public:
 	BOOL										m_blAudioShow;	//是否显示音频
 	BOOL										m_blCreateVideoWin;//是否创建视频窗口
 	BOOL										m_blUrl;			//是否网络流推送
-	BOOL										m_blPushStream;	//是否可以推流
+	BOOL										m_blPushReady;	//是否推流OK
+	BOOL										m_blPushStart;	//是否开始推流	
 	BOOL										m_blPreview;		//是否进行视频预览
 	BOOL										m_blPushSuccess;	//是否推送成功
 	BOOL										m_blPushSingle;	//是否推送单文件

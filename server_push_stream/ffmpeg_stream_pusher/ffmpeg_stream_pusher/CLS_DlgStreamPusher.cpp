@@ -69,7 +69,8 @@ CLS_DlgStreamPusher::CLS_DlgStreamPusher(CWnd* pParent /*=NULL*/)
 	m_blAudioShow = FALSE;
 	m_blPushSingle = TRUE;	//默认推送单个文件循环推送
 	m_blPushCircle = TRUE;	//默认推送文件都是循环推送
-	m_blPushStream = FALSE;
+	m_blPushStart = FALSE;
+	m_blPushReady = FALSE;
 	m_blPushSuccess = FALSE;
 	m_blCreateVideoWin = FALSE;
 
@@ -153,19 +154,19 @@ int video_thr(LPVOID lpParam)
 	AVFrame	*pFrame;
 	pFrame = avcodec_alloc_frame();
 	AVFrame *picture = avcodec_alloc_frame();
-	int size = avpicture_get_size(pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
-		pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height);
+
+	int size = avpicture_get_size(pThis->m_pCodecVideoCtx->pix_fmt, pThis->m_iDstVideoWidth, pThis->m_iDstVideoHeight);
 
 	//申请picture
-	if (avpicture_alloc((AVPicture*)picture, pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->pix_fmt,
+	if (avpicture_alloc((AVPicture*)picture, AV_PIX_FMT_YUV420P,
 		pThis->m_iSrcVideoWidth * 2,
 		pThis->m_iSrcVideoHeight * 2) < 0){
 		TRACE("avpicture_alloc < 0");
 		return iRet;
 	}
-
-	int height = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->height;
-	int width = pThis->m_pFmtRtmpCtx->streams[pThis->m_iVideoOutIndex]->codec->width;
+	//
+	int height = pThis->m_iDstVideoHeight;
+	int width = pThis->m_iDstVideoWidth;
 	int y_size = height*width;
 
 	SDL_Rect sdlSrcRect;
@@ -212,13 +213,15 @@ int video_thr(LPVOID lpParam)
 				SDL_RenderPresent(strct_streaminfo->m_pSdlRender);
 			}
 
-			int iVideoFifoSize = av_fifo_space(strct_streaminfo->m_pVideoFifo);
-			if (iVideoFifoSize >= size){
-				SDL_mutexP(strct_streaminfo->m_pVideoMutex);
-				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[0], y_size, NULL);
-				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[1], y_size / 4, NULL);
-				av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[2], y_size / 4, NULL);
-				SDL_mutexV(strct_streaminfo->m_pVideoMutex);
+			if (pThis->m_blPushStart){
+				int iVideoFifoSize = av_fifo_space(strct_streaminfo->m_pVideoFifo);
+				if (iVideoFifoSize >= size){
+					SDL_mutexP(strct_streaminfo->m_pVideoMutex);
+					av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[0], y_size, NULL);
+					av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[1], y_size / 4, NULL);
+					av_fifo_generic_write(strct_streaminfo->m_pVideoFifo, picture->data[2], y_size / 4, NULL);
+					SDL_mutexV(strct_streaminfo->m_pVideoMutex);
+				}
 			}
 		}
 	}
@@ -792,11 +795,6 @@ void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 		goto END;
 	}
 
-	if (OpenRtmpAddr() < 0){
-		TRACE("OpenRtmpAddr failed!/n");
-		goto END;
-	}
-
 	//开启视频采集线程
 	if (m_pStreamInfo->m_pVideoThr == NULL){
 		m_pStreamInfo->m_pVideoThr = SDL_CreateThread(video_thr, NULL, (void*)this);
@@ -814,7 +812,7 @@ void CLS_DlgStreamPusher::OnBnClickedBtnPreview()
 		}
 	}
 
-	m_blPushStream = TRUE;
+	m_blPushReady = TRUE;
 	m_blPreview = TRUE;
 END:
 	return;
@@ -929,7 +927,8 @@ void CLS_DlgStreamPusher::InitSdl()
 void CLS_DlgStreamPusher::UnInitInfo()
 {
 	//释放相关资源
-	m_blPushStream = FALSE;
+	m_blPushStart = FALSE;
+	m_blPushReady = FALSE;
 	m_blPreview = FALSE;
 	m_blPushSuccess = FALSE;
 
@@ -1616,15 +1615,16 @@ void CLS_DlgStreamPusher::OnBnClickedChkWriteFile()
 
 void CLS_DlgStreamPusher::OnBnClickedOk()
 {
-	if (!m_blPushStream && m_blUrl){
+	if (!m_blPushReady && m_blUrl){
 		MessageBox(_T("请先预览设置！\n"));
 		return;
 	}
 
 	if (OpenRtmpAddr() < 0){
-		MessageBox("文件推送失败！\n");
+		MessageBox("推送失败！\n");
 		return;
 	}
+	m_blPushStart = TRUE;
 
 	if (m_blUrl){
 		//开启采集推送线程
