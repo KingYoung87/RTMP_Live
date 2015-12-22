@@ -142,15 +142,6 @@ int video_thr(LPVOID lpParam)
 		return iRet;
 	}
 
-	//显示视频的区域
-	SDL_Rect sdlRect;
-	sdlRect.x = 0;
-	sdlRect.y = 0;
-	sdlRect.w = strct_streaminfo->m_width;
-	sdlRect.h = strct_streaminfo->m_height;
-
-	TRACE("Rect width is[%d] and height is[%d]\n", sdlRect.w, sdlRect.h);
-
 	AVFrame	*pFrame;
 	pFrame = avcodec_alloc_frame();
 	AVFrame *picture = avcodec_alloc_frame();
@@ -158,9 +149,7 @@ int video_thr(LPVOID lpParam)
 	int size = avpicture_get_size(pThis->m_pCodecVideoCtx->pix_fmt, pThis->m_iDstVideoWidth, pThis->m_iDstVideoHeight);
 
 	//申请picture
-	if (avpicture_alloc((AVPicture*)picture, AV_PIX_FMT_YUV420P,
-		pThis->m_iSrcVideoWidth * 2,
-		pThis->m_iSrcVideoHeight * 2) < 0){
+	if (avpicture_alloc((AVPicture*)picture, AV_PIX_FMT_YUV420P, pThis->m_iSrcVideoWidth * 2, pThis->m_iSrcVideoHeight * 2) < 0){
 		TRACE("avpicture_alloc < 0");
 		return iRet;
 	}
@@ -169,11 +158,12 @@ int video_thr(LPVOID lpParam)
 	int width = pThis->m_iDstVideoWidth;
 	int y_size = height*width;
 
+	//原视频区域
 	SDL_Rect sdlSrcRect;
 	sdlSrcRect.x = 0;
 	sdlSrcRect.y = 0;
-	sdlSrcRect.w = pThis->m_iSrcVideoHeight;
-	sdlSrcRect.h = pThis->m_iSrcVideoWidth;
+	sdlSrcRect.w = pThis->m_iSrcVideoWidth;
+	sdlSrcRect.h = pThis->m_iSrcVideoHeight;
 
 	//从摄像头获取数据
 	while (1){
@@ -204,6 +194,13 @@ int video_thr(LPVOID lpParam)
 				TRACE("sws_scale < 0");
 				goto END;
 			}
+
+			//显示视频的区域
+			SDL_Rect sdlRect;
+			sdlRect.x = 0;
+			sdlRect.y = 0;
+			sdlRect.w = pThis->m_iDstVideoWidth;
+			sdlRect.h = pThis->m_iDstVideoHeight;
 
 			if (pThis->m_blVideoShow){
 				//显示视频
@@ -2064,6 +2061,10 @@ void CLS_DlgStreamPusher::OnCbnSelchangeCobResolution()
 		m_iDstVideoWidth = iter->first;
 		m_iDstVideoHeight = iter->second;
 	}
+
+	if (UpdateSdlInfo() < 0){
+		TRACE("更新分辨率失败！\n");
+	}
 }
 
 
@@ -2408,22 +2409,12 @@ int CLS_DlgStreamPusher::InitVideoWindow()
 		goto END;
 	}
 
+	if (UpdateSdlInfo() < 0){
+		TRACE("UpdateSdlInfo < 0");
+		goto END;
+	}
+
 	m_blCreateVideoWin = TRUE;
-
-	//获取视频宽高之后创建纹理
-	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_iDstVideoWidth, m_iDstVideoHeight);
-	if (NULL == m_pStreamInfo->m_pSdlTexture){
-		MessageBox(_T("初始化视频窗口失败！\n"));
-		goto END;
-	}
-
-	TRACE("m_iSrcVideoWidth is [%d] m_iSrcVideoHeight is [%d] m_iDstVideoWidth is [%d] m_iDstVideoHeight is [%d]\n", m_iSrcVideoWidth, m_iSrcVideoHeight, m_iDstVideoWidth, m_iDstVideoHeight);
-	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iSrcVideoWidth, m_iSrcVideoHeight, m_pCodecVideoCtx->pix_fmt,
-		m_iDstVideoWidth, m_iDstVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
-	if (NULL == m_pStreamInfo->m_pVideoSwsCtx){
-		TRACE("NULL == strct_streaminfo->m_pVideoSwsCtx\n");
-		goto END;
-	}
 
 	iRet = 0;
 END:
@@ -2435,25 +2426,31 @@ void CLS_DlgStreamPusher::OnDestroy()
 	CDialog::OnDestroy();
 }
 
-int CLS_DlgStreamPusher::ScaleImg(AVCodecContext *pCodecCtx, AVFrame *src_picture, AVFrame *dst_picture, int nDstH, int nDstW)
+int CLS_DlgStreamPusher::UpdateSdlInfo()
 {
-	int i;
-	int nSrcStride[3];
-	int nDstStride[3];
-	int nSrcH = pCodecCtx->height;
-	int nSrcW = pCodecCtx->width;
+	int iRet = -1;
 
-	uint8_t *pSrcBuff[3] = { src_picture->data[0], src_picture->data[1], src_picture->data[2] };
+	if (NULL == m_pStreamInfo->m_pSdlRender){
+		TRACE("NULL == m_pStreamInfo->m_pSdlRender");
+		goto END;
+	}
 
-	nSrcStride[0] = nSrcW;
-	nSrcStride[1] = nSrcW / 2;
-	nSrcStride[2] = nSrcW / 2;
+	//获取视频宽高之后创建纹理
+	m_pStreamInfo->m_pSdlTexture = SDL_CreateTexture(m_pStreamInfo->m_pSdlRender, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, m_iDstVideoWidth, m_iDstVideoHeight);
+	if (NULL == m_pStreamInfo->m_pSdlTexture){
+		MessageBox(_T("初始化视频窗口失败！\n"));
+		goto END;
+	}
 
-	dst_picture->linesize[0] = nDstW;
-	dst_picture->linesize[1] = nDstW / 2;
-	dst_picture->linesize[2] = nDstW / 2;
+	m_pStreamInfo->m_pVideoSwsCtx = sws_getContext(m_iSrcVideoWidth, m_iSrcVideoHeight, m_pCodecVideoCtx->pix_fmt,
+		m_iDstVideoWidth, m_iDstVideoHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
+	if (NULL == m_pStreamInfo->m_pVideoSwsCtx){
+		TRACE("NULL == strct_streaminfo->m_pVideoSwsCtx\n");
+		goto END;
+	}
 
-	sws_scale(m_pStreamInfo->m_pVideoSwsCtx, src_picture->data, src_picture->linesize, 0, pCodecCtx->height, dst_picture->data, dst_picture->linesize);
+	iRet = 0;
 
-	return 1;
+END:
+	return iRet;
 }

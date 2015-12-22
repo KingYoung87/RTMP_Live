@@ -398,6 +398,14 @@ private:
 	**********************/
 	void OnClearItems();
 
+	/**********************
+	method: 更新sdl纹理等信息
+	param:
+	return: < 0: 更新失败
+			= 0: 更新成功
+	**********************/
+	int UpdateSdlInfo();
+
 public:
 	/**********************
 	method: 获取当前选择的音视频设备名臣
@@ -419,8 +427,6 @@ public:
 	return: AVFormatContext* 文件信息
 	**********************/
 	AVFormatContext* OpenFile(CString _cstrFilePath);
-
-	int ScaleImg(AVCodecContext *pCodecCtx, AVFrame *src_picture, AVFrame *dst_picture, int nDstH, int nDstW);
 
 	HBRUSH									m_bkBrush;		//背景刷
 	struct_stream_info*						m_pStreamInfo;	//音视频全局结构体
